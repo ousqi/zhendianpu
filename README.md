@@ -36,7 +36,7 @@ git clone <仓库地址> /var/www/zhendianpu
 cd /var/www/zhendianpu
 
 composer install --no-dev --optimize-autoloader --no-interaction
-npm ci
+npm install
 npm run build
 ```
 
@@ -193,7 +193,7 @@ curl -I https://mcp.example.com/
 git fetch --all --prune
 git checkout <已验证的标签或提交>
 composer install --no-dev --optimize-autoloader --no-interaction
-npm ci
+npm install
 npm run build
 php artisan migrate --force
 php artisan optimize
@@ -320,7 +320,7 @@ docker run --rm \
   -v "$PWD":/app \
   -w /app \
   node:22-bookworm \
-  sh -lc 'npm ci && npm run build'
+  sh -lc 'npm install && npm run build'
 
 ls -la public/build
 ```
