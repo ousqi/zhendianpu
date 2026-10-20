@@ -24,6 +24,6 @@ class VoidTransfer extends BookkeepingTool
     /** @return array<string, Type> */
     public function schema(JsonSchema $schema): array
     {
-        return ['event_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'transfer_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'revision' => $schema->integer()->min(1)->required(), 'void_reason' => $schema->string()->max(1000)];
+        return ['ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'event_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'transfer_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'revision' => $schema->integer()->min(1)->required(), 'void_reason' => $schema->string()->max(1000)];
     }
 }

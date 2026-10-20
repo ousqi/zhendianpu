@@ -24,7 +24,7 @@ class AddTransfer extends BookkeepingTool
     /** @return array<string, Type> */
     public function schema(JsonSchema $schema): array
     {
-        return ['event_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'source_account_id' => $schema->integer()->min(1)->required(), 'destination_account_id' => $schema->integer()->min(1)->required(),
+        return ['ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'event_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'source_account_id' => $schema->integer()->min(1)->required(), 'destination_account_id' => $schema->integer()->min(1)->required(),
             'amount' => $schema->string()->pattern('^\\d{1,10}(?:\\.\\d{1,2})?$')->required(), 'occurred_on' => $schema->string()->format('date')->nullable(), 'description' => $schema->string()->max(1000)->nullable()];
     }
 }

@@ -6,9 +6,11 @@ use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\User;
 use App\Services\Bookkeeping\BookkeepingQueryService;
 use App\Services\Bookkeeping\BookkeepingService;
+use App\Services\Bookkeeping\LedgerService;
 use App\Services\Mcp\AccessResolver;
 use Filament\Actions\Action;
 use Filament\Forms\Components\DatePicker;
@@ -53,9 +55,16 @@ class BookkeepingEntries extends Page implements HasTable
         return app(BookkeepingService::class)->canAccess($user);
     }
 
+    protected function ledger(): Ledger
+    {
+        $user = auth()->user();
+
+        return app(LedgerService::class)->current($user instanceof User ? $user : null);
+    }
+
     protected function entries(): Builder
     {
-        return Entry::query()->with(['category', 'account']);
+        return Entry::query()->where('ledger_id', $this->ledger()->id)->with(['category', 'account']);
     }
 
     public function table(Table $table): Table
@@ -76,7 +85,7 @@ class BookkeepingEntries extends Page implements HasTable
                         ->modalSubmitAction(false)
                         ->modalCancelActionLabel('关闭'),
                 ),
-            TextColumn::make('account.name')->label('账户')->visibleFrom('md'), TextColumn::make('amount')->label('金额')->money('CNY')->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
+            TextColumn::make('account.name')->label('账户')->visibleFrom('md'), TextColumn::make('amount')->label('金额')->money($this->ledger()->currency)->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
         ])->filters([
             Filter::make('occurred_on')->label('日期范围')->schema([
                 DatePicker::make('start')->label('开始日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d'),
@@ -102,7 +111,7 @@ class BookkeepingEntries extends Page implements HasTable
         ], layout: FiltersLayout::Modal)->toolbarActions([$this->recordAction()])->recordActions([
             $this->recordAction('editEntry', '编辑'),
             Action::make('voidEntry')->label('撤销')->color('danger')->visible(fn (): bool => $this->canWrite())->requiresConfirmation()->action(function (Entry $record, BookkeepingService $service): void {
-                $service->void($this->context(), ['event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision]);
+                $service->void($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision]);
                 Notification::make()->title('收支记录已撤销')->success()->send();
             }),
         ]);
@@ -113,16 +122,16 @@ class BookkeepingEntries extends Page implements HasTable
         return Action::make($name)->label($label)->visible(fn (): bool => $this->canWrite())->schema([
             Select::make('direction')->label('方向')->options(['income' => '收入', 'expense' => '支出'])->required()->live(),
             TextInput::make('amount')->label('金额')->numeric()->minValue(0.01)->required(),
-            Select::make('category_id')->label('分类')->options(fn (Get $get): array => Category::query()->where('is_active', true)->where('direction', $get('direction'))->orderBy('name')->pluck('name', 'id')->all())
+            Select::make('category_id')->label('分类')->options(fn (Get $get): array => Category::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->doesntHave('children')->where('direction', $get('direction'))->orderBy('name')->pluck('name', 'id')->all())
                 ->searchable()->preload()->searchPrompt('输入分类名称快速选择')->required(),
-            Select::make('account_id')->label('账户')->options(fn (): array => Account::query()->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->default(fn (): ?int => Account::query()->where('is_default', true)->value('id')),
-            DatePicker::make('occurred_on')->label('日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(now('Asia/Shanghai')->toDateString())->required(), Textarea::make('description')->label('说明')->maxLength(1000),
+            Select::make('account_id')->label('账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->default(fn (): ?int => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_default', true)->value('id')),
+            DatePicker::make('occurred_on')->label('日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(fn (): string => now($this->ledger()->timezone)->toDateString())->required(), Textarea::make('description')->label('说明')->maxLength(1000),
         ])->fillForm(fn (?Entry $record): array => $record ? $record->only(['direction', 'amount', 'category_id', 'account_id', 'occurred_on', 'description']) : [])
             ->action(function (array $data, ?Entry $record, BookkeepingService $service): void {
                 if ($record) {
-                    $service->update($this->context(), ['event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision, ...$data], 'admin');
+                    $service->update($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision, ...$data], 'admin');
                 } else {
-                    $service->add($this->context(), ['event_id' => (string) Str::ulid(), 'entries' => [$data]], 'admin');
+                    $service->add($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entries' => [$data]], 'admin');
                 }
                 Notification::make()->title('收支记录已保存')->success()->send();
             });
@@ -141,6 +150,6 @@ class BookkeepingEntries extends Page implements HasTable
 
     private function canWrite(): bool
     {
-        return app(BookkeepingService::class)->canWrite($this->context());
+        return app(BookkeepingService::class)->canWrite($this->context()) && $this->ledger()->status === 'active';
     }
 }

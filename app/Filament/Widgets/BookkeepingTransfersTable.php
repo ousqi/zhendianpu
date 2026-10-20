@@ -4,10 +4,12 @@ namespace App\Filament\Widgets;
 
 use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Account;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\Bookkeeping\Transfer;
 use App\Models\User;
 use App\Services\Bookkeeping\BookkeepingService;
 use App\Services\Bookkeeping\BookkeepingTransferService;
+use App\Services\Bookkeeping\LedgerService;
 use App\Services\Mcp\AccessResolver;
 use Filament\Actions\Action;
 use Filament\Forms\Components\DatePicker;
@@ -35,11 +37,18 @@ class BookkeepingTransfersTable extends TableWidget
         return $user instanceof User && app(BookkeepingService::class)->canAccess($user);
     }
 
+    private function ledger(): Ledger
+    {
+        $user = auth()->user();
+
+        return app(LedgerService::class)->current($user instanceof User ? $user : null);
+    }
+
     public function table(Table $table): Table
     {
         return $table
             ->heading('转账记录')
-            ->query(fn (): Builder => Transfer::query()->whereNull('voided_at')->with(['sourceAccount:id,name', 'destinationAccount:id,name']))
+            ->query(fn (): Builder => Transfer::query()->where('ledger_id', $this->ledger()->id)->whereNull('voided_at')->with(['sourceAccount:id,name', 'destinationAccount:id,name']))
             ->defaultSort('occurred_on', 'desc')
             ->columns([
                 TextColumn::make('occurred_on')->label('日期')->date('Y-m-d')->sortable(),
@@ -77,6 +86,7 @@ class BookkeepingTransfersTable extends TableWidget
                     ->visible(fn (Transfer $record): bool => $this->canWrite() && $record->voided_at === null)
                     ->action(function (array $data, Transfer $record, BookkeepingTransferService $service): void {
                         $service->void($this->context(), [
+                            'ledger_id' => $this->ledger()->public_id,
                             'event_id' => (string) Str::ulid(),
                             'transfer_id' => $record->public_id,
                             'revision' => $record->revision,
@@ -101,9 +111,11 @@ class BookkeepingTransfersTable extends TableWidget
         ])->fillForm(fn (?Transfer $record): array => $record?->only(['source_account_id', 'destination_account_id', 'amount', 'occurred_on', 'description']) ?? [])
             ->action(function (array $data, ?Transfer $record, BookkeepingTransferService $service): void {
                 if ($record) {
-                    $service->update($this->context(), ['event_id' => (string) Str::ulid(), 'transfer_id' => $record->public_id, 'revision' => $record->revision, ...$data]);
+                    $service->update($this->context(), ['ledger_id' => $this->ledger()->public_id,
+                        'event_id' => (string) Str::ulid(), 'transfer_id' => $record->public_id, 'revision' => $record->revision, ...$data]);
                 } else {
-                    $service->add($this->context(), ['event_id' => (string) Str::ulid(), ...$data], 'admin');
+                    $service->add($this->context(), ['ledger_id' => $this->ledger()->public_id,
+                        'event_id' => (string) Str::ulid(), ...$data], 'admin');
                 }
 
                 Notification::make()->title('转账已保存')->success()->send();
@@ -113,12 +125,12 @@ class BookkeepingTransfersTable extends TableWidget
     /** @return array<int, string> */
     private function accountOptions(): array
     {
-        return Account::query()->where('is_active', true)->orderBy('sort_order')->orderBy('name')->pluck('name', 'id')->all();
+        return Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->orderBy('name')->pluck('name', 'id')->all();
     }
 
     private function canWrite(): bool
     {
-        return app(BookkeepingService::class)->canWrite($this->context());
+        return app(BookkeepingService::class)->canWrite($this->context()) && $this->ledger()->status === 'active';
     }
 
     private function context(): AccessContext

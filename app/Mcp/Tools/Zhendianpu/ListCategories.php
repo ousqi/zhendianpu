@@ -4,6 +4,7 @@ namespace App\Mcp\Tools\Zhendianpu;
 
 use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Category;
+use App\Services\Bookkeeping\BookkeepingService;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\JsonSchema\Types\Type;
 use Laravel\Mcp\Request;
@@ -20,17 +21,23 @@ class ListCategories extends BookkeepingTool
 {
     protected function respond(AccessContext $context, Request $request): array
     {
+        abort_unless(app(BookkeepingService::class)->canRead($context), 403, 'FORBIDDEN');
+        $ledger = $this->ledger($request);
         $direction = $request->get('direction');
 
-        $categories = Category::query()
+        $categories = Category::query()->where('ledger_id', $ledger->id)
             ->when($direction !== null, fn ($query) => $query->where('direction', $direction))
             ->orderBy('direction')
+            ->orderBy('parent_id')
+            ->orderBy('sort_order')
             ->orderBy('name')
-            ->get(['id', 'name', 'direction', 'is_active'])
+            ->get(['id', 'parent_id', 'name', 'direction', 'sort_order', 'is_active'])
             ->map(fn (Category $category): array => [
                 'id' => $category->id,
                 'name' => $category->name,
                 'direction' => $category->direction,
+                'parent_id' => $category->parent_id,
+                'sort_order' => $category->sort_order,
                 'is_active' => $category->is_active,
             ])
             ->all();
@@ -46,6 +53,7 @@ class ListCategories extends BookkeepingTool
     public function schema(JsonSchema $schema): array
     {
         return [
+            'ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(),
             'direction' => $schema->string()->enum(['income', 'expense'])->nullable(),
         ];
     }

@@ -33,6 +33,11 @@ class Transfer extends Model
         return $this->belongsTo(Account::class, 'source_account_id');
     }
 
+    public function ledger(): BelongsTo
+    {
+        return $this->belongsTo(Ledger::class);
+    }
+
     public function destinationAccount(): BelongsTo
     {
         return $this->belongsTo(Account::class, 'destination_account_id');

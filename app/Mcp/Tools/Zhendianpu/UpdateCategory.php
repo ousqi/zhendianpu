@@ -18,7 +18,7 @@ class UpdateCategory extends BookkeepingTool
     protected function respond(AccessContext $context, Request $request): array
     {
         $category = Category::query()->findOrFail($request->integer('category_id'));
-        $category = app(BookkeepingCategoryService::class)->update($context, $category, $request->only(['name', 'direction']));
+        $category = app(BookkeepingCategoryService::class)->update($context, $this->ledger($request), $category, $request->only(['name', 'direction', 'parent_id', 'sort_order', 'is_active']));
 
         return [
             'ok' => true,
@@ -26,6 +26,8 @@ class UpdateCategory extends BookkeepingTool
                 'id' => $category->id,
                 'name' => $category->name,
                 'direction' => $category->direction,
+                'parent_id' => $category->parent_id,
+                'sort_order' => $category->sort_order,
                 'is_active' => $category->is_active,
             ],
             'request_id' => $context->requestId,
@@ -36,9 +38,13 @@ class UpdateCategory extends BookkeepingTool
     public function schema(JsonSchema $schema): array
     {
         return [
+            'ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(),
             'category_id' => $schema->integer()->min(1)->required(),
-            'name' => $schema->string()->max(255)->required(),
-            'direction' => $schema->string()->enum(['income', 'expense'])->required(),
+            'name' => $schema->string()->max(255)->nullable(),
+            'direction' => $schema->string()->enum(['income', 'expense'])->nullable(),
+            'parent_id' => $schema->integer()->min(1)->nullable(),
+            'sort_order' => $schema->integer()->min(0)->nullable(),
+            'is_active' => $schema->boolean()->nullable(),
         ];
     }
 }

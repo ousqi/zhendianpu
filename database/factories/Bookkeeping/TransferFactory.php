@@ -3,6 +3,7 @@
 namespace Database\Factories\Bookkeeping;
 
 use App\Models\Bookkeeping\Account;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\Bookkeeping\Transfer;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -12,16 +13,13 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class TransferFactory extends Factory
 {
-    /**
-     * Define the model's default state.
-     *
-     * @return array<string, mixed>
-     */
+    /** @return array<string, mixed> */
     public function definition(): array
     {
         return [
-            'source_account_id' => Account::factory(),
-            'destination_account_id' => Account::factory(),
+            'ledger_id' => Ledger::factory(),
+            'source_account_id' => fn (array $attributes): int => Account::factory()->create(['ledger_id' => $attributes['ledger_id']])->id,
+            'destination_account_id' => fn (array $attributes): int => Account::factory()->create(['ledger_id' => $attributes['ledger_id']])->id,
             'amount' => '10.00',
             'occurred_on' => now('Asia/Shanghai')->toDateString(),
             'source' => 'admin',

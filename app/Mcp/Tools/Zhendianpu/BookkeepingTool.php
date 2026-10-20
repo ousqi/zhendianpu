@@ -3,6 +3,8 @@
 namespace App\Mcp\Tools\Zhendianpu;
 
 use App\Data\Mcp\AccessContext;
+use App\Models\Bookkeeping\Ledger;
+use App\Services\Bookkeeping\LedgerService;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\JsonSchema\Types\Type;
@@ -35,6 +37,16 @@ abstract class BookkeepingTool extends Tool
 
             return Response::error(json_encode(['ok' => false, 'code' => 'INTERNAL_ERROR', 'request_id' => $context->requestId], JSON_THROW_ON_ERROR));
         }
+    }
+
+    protected function ledger(Request $request): Ledger
+    {
+        $ledgerId = $request->get('ledger_id');
+        if (! is_string($ledgerId)) {
+            throw ValidationException::withMessages(['ledger_id' => '必须选择账本。']);
+        }
+
+        return app(LedgerService::class)->get($ledgerId);
     }
 
     /** @return array<string, mixed> */

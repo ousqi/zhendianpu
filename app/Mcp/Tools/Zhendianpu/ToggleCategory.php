@@ -18,7 +18,7 @@ class ToggleCategory extends BookkeepingTool
     protected function respond(AccessContext $context, Request $request): array
     {
         $category = Category::query()->findOrFail($request->integer('category_id'));
-        $category = app(BookkeepingCategoryService::class)->toggle($context, $category);
+        $category = app(BookkeepingCategoryService::class)->toggle($context, $this->ledger($request), $category);
 
         return [
             'ok' => true,
@@ -26,6 +26,8 @@ class ToggleCategory extends BookkeepingTool
                 'id' => $category->id,
                 'name' => $category->name,
                 'direction' => $category->direction,
+                'parent_id' => $category->parent_id,
+                'sort_order' => $category->sort_order,
                 'is_active' => $category->is_active,
             ],
             'request_id' => $context->requestId,
@@ -36,6 +38,7 @@ class ToggleCategory extends BookkeepingTool
     public function schema(JsonSchema $schema): array
     {
         return [
+            'ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(),
             'category_id' => $schema->integer()->min(1)->required(),
         ];
     }

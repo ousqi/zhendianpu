@@ -3,6 +3,7 @@
 namespace Database\Factories\Bookkeeping;
 
 use App\Models\Bookkeeping\Account;
+use App\Models\Bookkeeping\Ledger;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -18,6 +19,7 @@ class AccountFactory extends Factory
     public function definition(): array
     {
         return [
+            'ledger_id' => Ledger::factory(),
             'name' => fake()->unique()->word(),
             'type' => 'other',
             'sort_order' => 0,

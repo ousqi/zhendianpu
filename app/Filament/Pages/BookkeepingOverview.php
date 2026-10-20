@@ -4,9 +4,11 @@ namespace App\Filament\Pages;
 
 use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Entry;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\User;
 use App\Services\Bookkeeping\BookkeepingQueryService;
 use App\Services\Bookkeeping\BookkeepingService;
+use App\Services\Bookkeeping\LedgerService;
 use App\Services\Mcp\AccessResolver;
 use Filament\Actions\Action;
 use Filament\Pages\Page;
@@ -54,14 +56,14 @@ class BookkeepingOverview extends Page implements HasTable
 
     public function mount(): void
     {
-        $today = now('Asia/Shanghai');
+        $today = now($this->ledger()->timezone);
         $this->startDate = $today->copy()->startOfMonth()->toDateString();
         $this->endDate = $today->toDateString();
     }
 
     public function useRange(string $range): void
     {
-        $today = now('Asia/Shanghai');
+        $today = now($this->ledger()->timezone);
         $ranges = [
             'week' => [$today->copy()->startOfWeek(), $today->copy()],
             'month' => [$today->copy()->startOfMonth(), $today->copy()],
@@ -93,12 +95,12 @@ class BookkeepingOverview extends Page implements HasTable
 
     public function minimumSelectableDate(): string
     {
-        return now('Asia/Shanghai')->subDays(self::MAX_DATE_RANGE_DAYS - 1)->toDateString();
+        return now($this->ledger()->timezone)->subDays(self::MAX_DATE_RANGE_DAYS - 1)->toDateString();
     }
 
     public function maximumSelectableDate(): string
     {
-        return now('Asia/Shanghai')->toDateString();
+        return now($this->ledger()->timezone)->toDateString();
     }
 
     public function hasValidDateRange(): bool
@@ -108,7 +110,7 @@ class BookkeepingOverview extends Page implements HasTable
 
     public function canWrite(): bool
     {
-        return app(BookkeepingService::class)->canWrite($this->context());
+        return app(BookkeepingService::class)->canWrite($this->context()) && $this->ledger()->status === 'active';
     }
 
     /** @param list<array{id: int, name: string, direction: string, amount: string, percentage: ?string}> $categories @return list<array{id: ?int, name: string, direction: string, amount: string, percentage: ?string}> */
@@ -185,7 +187,7 @@ class BookkeepingOverview extends Page implements HasTable
                 TextColumn::make('direction')->label('方向')->badge()->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
                 TextColumn::make('category.name')->label('分类'),
                 TextColumn::make('account.name')->label('账户')->visibleFrom('md'),
-                TextColumn::make('amount')->label('金额')->money('CNY')->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
+                TextColumn::make('amount')->label('金额')->money($this->ledger()->currency)->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
                 TextColumn::make('description')->label('说明')->wrap()->visibleFrom('md'),
             ])
             ->emptyStateHeading('当前期间暂无记录')
@@ -193,7 +195,7 @@ class BookkeepingOverview extends Page implements HasTable
             ->emptyStateActions([
                 Action::make('addEntry')
                     ->label('去记一笔')
-                    ->url(BookkeepingEntries::getUrl())
+                    ->url(fn (): string => BookkeepingEntries::getUrl())
                     ->visible(fn (): bool => $this->canWrite())
                     ->button(),
             ])
@@ -203,9 +205,16 @@ class BookkeepingOverview extends Page implements HasTable
     /** @return array{totals: array{income: string, expense: string, balance: string}, categories: list<array<string, mixed>>, trend: array<string, mixed>, accounts: list<array<string, mixed>>, account_total: string} */
     public function overview(): array
     {
-        $filters = ['start_date' => $this->startDate, 'end_date' => $this->endDate];
+        $filters = ['ledger_id' => $this->ledger()->public_id, 'start_date' => $this->startDate, 'end_date' => $this->endDate];
 
         return app(BookkeepingQueryService::class)->dashboard($this->context(), $filters);
+    }
+
+    private function ledger(): Ledger
+    {
+        $user = auth()->user();
+
+        return app(LedgerService::class)->current($user instanceof User ? $user : null);
     }
 
     private function context(): AccessContext
@@ -234,7 +243,7 @@ class BookkeepingOverview extends Page implements HasTable
 
     private function recentEntries(): Builder
     {
-        return Entry::query()
+        return Entry::query()->where('ledger_id', $this->ledger()->id)
             ->with(['category:id,name', 'account:id,name'])
             ->whereBetween('occurred_on', [$this->startDate, $this->endDate])
             ->whereNull('voided_at')
@@ -273,7 +282,7 @@ class BookkeepingOverview extends Page implements HasTable
                 return;
             }
 
-            $days = Carbon::parse($this->startDate, 'Asia/Shanghai')->diffInDays(Carbon::parse($this->endDate, 'Asia/Shanghai')) + 1;
+            $days = Carbon::parse($this->startDate, $this->ledger()->timezone)->diffInDays(Carbon::parse($this->endDate, $this->ledger()->timezone)) + 1;
             if ($days > self::MAX_DATE_RANGE_DAYS) {
                 $validator->errors()->add('endDate', '日期范围最多为 '.self::MAX_DATE_RANGE_DAYS.' 天。');
             }

@@ -5,6 +5,7 @@ namespace App\Models\Bookkeeping;
 use Database\Factories\Bookkeeping\AccountFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Account extends Model
@@ -16,11 +17,16 @@ class Account extends Model
 
     protected $table = 'bookkeeping_accounts';
 
-    protected $fillable = ['name', 'type', 'opening_balance', 'sort_order', 'is_active', 'is_default'];
+    protected $fillable = ['ledger_id', 'name', 'type', 'opening_balance', 'sort_order', 'is_active', 'is_default'];
 
     protected function casts(): array
     {
         return ['opening_balance' => 'decimal:2', 'sort_order' => 'integer', 'is_active' => 'boolean', 'is_default' => 'boolean'];
+    }
+
+    public function ledger(): BelongsTo
+    {
+        return $this->belongsTo(Ledger::class);
     }
 
     public function entries(): HasMany

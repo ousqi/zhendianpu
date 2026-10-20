@@ -6,6 +6,7 @@ use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
+use App\Models\Bookkeeping\Ledger;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
@@ -21,21 +22,20 @@ class BookkeepingQueryService
 
     private const int MAX_DATE_RANGE_DAYS = 1096;
 
-    public function __construct(private BookkeepingService $service, private BookkeepingAccountService $accounts) {}
+    public function __construct(private BookkeepingService $service, private BookkeepingAccountService $accounts, private LedgerService $ledgers) {}
 
     /** @param array<string, mixed> $arguments @return array<string, mixed> */
     public function context(AccessContext $context, array $arguments): array
     {
         $this->readable($context);
-        if ($arguments !== []) {
-            throw ValidationException::withMessages(['arguments' => '获取上下文不接受参数。']);
+        $ledgerId = Validator::make($arguments, ['ledger_id' => ['nullable', 'ulid']])->validate()['ledger_id'] ?? null;
+        $ledgers = $this->ledgers->list()->map(fn (Ledger $ledger): array => ['id' => $ledger->public_id, 'name' => $ledger->name, 'type' => $ledger->type, 'status' => $ledger->status])->all();
+        if ($ledgerId === null) {
+            return ['ok' => true, 'request_id' => $context->requestId, 'ledgers' => $ledgers];
         }
+        $ledger = $this->ledgers->get($ledgerId);
 
-        return ['ok' => true, 'request_id' => $context->requestId, 'date' => now('Asia/Shanghai')->toDateString(), 'timezone' => 'Asia/Shanghai', 'currency' => 'CNY',
-            'can_write' => $this->service->canWrite($context), 'categories' => Category::query()->where('is_active', true)->orderBy('direction')->orderBy('name')
-                ->get(['id', 'name', 'direction'])->map(fn (Category $category): array => ['id' => $category->id, 'name' => $category->name, 'direction' => $category->direction])->all(),
-            'default_account_id' => Account::query()->where('is_default', true)->value('id'), 'accounts' => Account::query()->where('is_active', true)->orderBy('sort_order')->orderBy('name')
-                ->get(['id', 'name', 'type', 'is_default'])->map(fn (Account $account): array => ['id' => $account->id, 'name' => $account->name, 'type' => $account->type, 'is_default' => $account->is_default])->all()];
+        return ['ok' => true, 'request_id' => $context->requestId, 'ledger' => ['id' => $ledger->public_id, 'name' => $ledger->name, 'status' => $ledger->status], 'date' => now($ledger->timezone)->toDateString(), 'timezone' => $ledger->timezone, 'currency' => $ledger->currency, 'can_write' => $this->service->canWrite($context) && $ledger->status === 'active', 'categories' => Category::query()->where('ledger_id', $ledger->id)->where('is_active', true)->doesntHave('children')->orderBy('direction')->orderBy('name')->get(['id', 'name', 'direction'])->map(fn (Category $category): array => ['id' => $category->id, 'name' => $category->name, 'direction' => $category->direction])->all(), 'default_account_id' => Account::query()->where('ledger_id', $ledger->id)->where('is_default', true)->value('id'), 'accounts' => Account::query()->where('ledger_id', $ledger->id)->where('is_active', true)->orderBy('sort_order')->orderBy('name')->get(['id', 'name', 'type', 'is_default'])->map(fn (Account $account): array => ['id' => $account->id, 'name' => $account->name, 'type' => $account->type, 'is_default' => $account->is_default])->all()];
     }
 
     /** @param array<string, mixed> $arguments @return array<string, mixed> */
@@ -43,11 +43,12 @@ class BookkeepingQueryService
     {
         $this->readable($context);
         $input = $this->filters($arguments, true);
-        $query = $this->query($input)->with(['category', 'account'])->orderByDesc('occurred_on')->orderByDesc('id');
+        $ledger = $this->ledgers->get($input['ledger_id']);
+        $query = $this->query($ledger, $input)->with(['category', 'account'])->orderByDesc('occurred_on')->orderByDesc('id');
         $rows = $query->paginate($input['limit'] ?? 20)->through(fn (Entry $entry): array => $this->service->present($entry));
 
         return ['ok' => true, 'request_id' => $context->requestId, 'period' => ['start' => $input['start_date'], 'end' => $input['end_date']],
-            'records' => $rows->items(), 'current_page' => $rows->currentPage(), 'last_page' => $rows->lastPage(), 'summary' => $this->totals($this->summaryQuery($input))];
+            'records' => $rows->items(), 'current_page' => $rows->currentPage(), 'last_page' => $rows->lastPage(), 'summary' => $this->totals($this->summaryQuery($ledger, $input))];
     }
 
     /** @param array<string, mixed> $arguments @return array<string, mixed> */
@@ -55,20 +56,22 @@ class BookkeepingQueryService
     {
         $this->readable($context);
         $input = $this->filters($arguments, false);
-        $summary = $this->summaryData($input);
+        $ledger = $this->ledgers->get($input['ledger_id']);
+        $summary = $this->summaryData($ledger, $input);
 
         return ['ok' => true, 'request_id' => $context->requestId, 'period' => ['start' => $input['start_date'], 'end' => $input['end_date']],
             'totals' => $summary['totals'], 'categories' => $summary['categories']];
     }
 
-    /** @param array<string, mixed> $arguments @return array{totals: array{income: string, expense: string, balance: string}, categories: list<array{id: int, name: string, direction: string, amount: string, percentage: ?string}>, trend: array<string, mixed>, accounts: list<array{id: int, name: string, balance: string}>, account_total: string} */
+    /** @param array<string, mixed> $arguments @return array{totals: array{income: string, expense: string, balance: string}, categories: list<array{id: int, name: string, direction: string, amount: string, percentage: ?string}>, trend: array<string, mixed>, accounts: list<array{id: int, name: string, balance: string}>, account_total: string, recent: list<array<string, mixed>>} */
     public function dashboard(AccessContext $context, array $arguments): array
     {
         $this->readable($context);
         $input = $this->filters($arguments, false);
-        $summary = $this->summaryData($input);
-        $query = $this->summaryQuery($input);
-        $accounts = $this->accounts->accountsWithBalances()
+        $ledger = $this->ledgers->get($input['ledger_id']);
+        $summary = $this->summaryData($ledger, $input);
+        $query = $this->summaryQuery($ledger, $input);
+        $accounts = $this->accounts->accountsWithBalances($ledger)
             ->where(function (Builder $query): void {
                 $query->where('bookkeeping_accounts.is_active', true)
                     ->orWhereNotNull('entry_balances.account_id')
@@ -77,14 +80,17 @@ class BookkeepingQueryService
             })->orderBy('sort_order')->orderBy('name')->get(['bookkeeping_accounts.id', 'bookkeeping_accounts.name', 'balance'])
             ->map(fn (Account $account): array => ['id' => $account->id, 'name' => $account->name, 'balance' => bcadd((string) $account->balance, '0', 2)])->all();
 
-        return [...$summary, 'trend' => $this->trend($query, $input['start_date'], $input['end_date']), 'accounts' => $accounts,
+        $recent = (clone $query)->with(['ledger', 'category', 'account'])->orderByDesc('occurred_on')->orderByDesc('id')->limit(10)->get()
+            ->map(fn (Entry $entry): array => $this->service->present($entry))->all();
+
+        return [...$summary, 'trend' => $this->trend($query, $input['start_date'], $input['end_date'], $ledger->timezone), 'accounts' => $accounts, 'recent' => $recent,
             'account_total' => array_reduce($accounts, fn (string $total, array $account): string => bcadd($total, $account['balance'], 2), '0.00')];
     }
 
     /** @param array<string, mixed> $input */
-    public function summaryFor(array $input): array
+    public function summaryFor(Ledger $ledger, array $input): array
     {
-        return $this->totals($this->summaryQuery($this->filters($input, false)));
+        return $this->totals($this->summaryQuery($ledger, $this->filters([...$input, 'ledger_id' => $ledger->public_id], false)));
     }
 
     public function totalsFor(Builder $query): array
@@ -95,7 +101,7 @@ class BookkeepingQueryService
     /** @param array<string, mixed> $arguments @return array<string, mixed> */
     private function filters(array $arguments, bool $allowsPagination): array
     {
-        $rules = ['start_date' => ['nullable', 'date_format:Y-m-d'], 'end_date' => ['nullable', 'date_format:Y-m-d'], 'direction' => ['nullable', 'in:income,expense'],
+        $rules = ['ledger_id' => ['required', 'ulid'], 'start_date' => ['nullable', 'date_format:Y-m-d'], 'end_date' => ['nullable', 'date_format:Y-m-d'], 'direction' => ['nullable', 'in:income,expense'],
             'category_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'keyword' => ['nullable', 'string', 'max:1000'], 'include_voided' => ['nullable', 'boolean']];
         if ($allowsPagination) {
             $rules['page'] = ['nullable', 'integer', 'min:1'];
@@ -105,12 +111,13 @@ class BookkeepingQueryService
             throw ValidationException::withMessages(['arguments' => '存在不支持的查询参数。']);
         }
         $input = Validator::make($arguments, $rules)->validate();
-        $input['end_date'] ??= now('Asia/Shanghai')->toDateString();
-        $input['start_date'] ??= now('Asia/Shanghai')->subDays(29)->toDateString();
+        $timezone = $this->ledgers->get($input['ledger_id'])->timezone;
+        $input['end_date'] ??= now($timezone)->toDateString();
+        $input['start_date'] ??= now($timezone)->subDays(29)->toDateString();
         if ($input['start_date'] > $input['end_date']) {
             throw ValidationException::withMessages(['start_date' => '开始日期不得晚于结束日期。']);
         }
-        if (Carbon::parse($input['start_date'], 'Asia/Shanghai')->diffInDays(Carbon::parse($input['end_date'], 'Asia/Shanghai')) + 1 > self::MAX_DATE_RANGE_DAYS) {
+        if (Carbon::parse($input['start_date'], $timezone)->diffInDays(Carbon::parse($input['end_date'], $timezone)) + 1 > self::MAX_DATE_RANGE_DAYS) {
             throw ValidationException::withMessages(['end_date' => '日期范围最多为 '.self::MAX_DATE_RANGE_DAYS.' 天。']);
         }
 
@@ -118,9 +125,9 @@ class BookkeepingQueryService
     }
 
     /** @param array<string, mixed> $input */
-    private function query(array $input): Builder
+    private function query(Ledger $ledger, array $input): Builder
     {
-        return Entry::query()->whereBetween('bookkeeping_entries.occurred_on', [$input['start_date'], $input['end_date']])
+        return Entry::query()->where('bookkeeping_entries.ledger_id', $ledger->id)->whereBetween('bookkeeping_entries.occurred_on', [$input['start_date'], $input['end_date']])
             ->when(empty($input['include_voided']), fn (Builder $query): Builder => $query->whereNull('bookkeeping_entries.voided_at'))
             ->when(isset($input['direction']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.direction', $input['direction']))
             ->when(isset($input['category_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.category_id', $input['category_id']))
@@ -139,9 +146,9 @@ class BookkeepingQueryService
     }
 
     /** @param array<string, mixed> $input @return array{totals: array{income: string, expense: string, balance: string}, categories: list<array{id: int, name: string, direction: string, amount: string, percentage: ?string}>} */
-    private function summaryData(array $input): array
+    private function summaryData(Ledger $ledger, array $input): array
     {
-        $query = $this->summaryQuery($input);
+        $query = $this->summaryQuery($ledger, $input);
         $totals = $this->totals($query);
         $categories = (clone $query)->join('bookkeeping_categories', 'bookkeeping_entries.category_id', '=', 'bookkeeping_categories.id')
             ->selectRaw('bookkeeping_categories.id, bookkeeping_categories.name, bookkeeping_entries.direction, SUM(bookkeeping_entries.amount) as total')
@@ -156,17 +163,17 @@ class BookkeepingQueryService
     }
 
     /** @return array{labels: list<string>, datasets: list<array{label: string, data: list<string>, borderColor: string, backgroundColor: string, tension: float, fill: bool}>} */
-    private function trend(Builder $query, string $startDate, string $endDate): array
+    private function trend(Builder $query, string $startDate, string $endDate, string $timezone): array
     {
-        $start = Carbon::parse($startDate, 'Asia/Shanghai')->startOfDay();
-        $end = Carbon::parse($endDate, 'Asia/Shanghai')->startOfDay();
+        $start = Carbon::parse($startDate, $timezone)->startOfDay();
+        $end = Carbon::parse($endDate, $timezone)->startOfDay();
         $days = $start->diffInDays($end) + 1;
         $unit = $days <= self::MAX_DAILY_TREND_LABELS ? 'day' : ($days <= self::MAX_WEEKLY_TREND_DAYS ? 'week' : 'month');
         $totals = [];
 
         (clone $query)->select('occurred_on', 'direction')->selectRaw('SUM(amount) as total')->groupBy('occurred_on', 'direction')->get()
-            ->each(function (object $row) use (&$totals, $unit): void {
-                $bucket = $this->trendBucket(Carbon::parse($row->occurred_on, 'Asia/Shanghai'), $unit);
+            ->each(function (object $row) use (&$totals, $unit, $timezone): void {
+                $bucket = $this->trendBucket(Carbon::parse($row->occurred_on, $timezone), $unit);
                 $totals[$bucket][$row->direction] = bcadd($totals[$bucket][$row->direction] ?? '0.00', (string) $row->total, 2);
             });
 
@@ -218,9 +225,9 @@ class BookkeepingQueryService
     }
 
     /** @param array<string, mixed> $input */
-    private function summaryQuery(array $input): Builder
+    private function summaryQuery(Ledger $ledger, array $input): Builder
     {
-        return $this->query([...$input, 'include_voided' => false]);
+        return $this->query($ledger, [...$input, 'include_voided' => false]);
     }
 
     private function readable(AccessContext $context): void

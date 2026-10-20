@@ -11,6 +11,7 @@ use App\Mcp\Tools\Zhendianpu\UpdateCategory;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\Bookkeeping\Transfer;
 use App\Models\McpServer;
 use App\Models\User;
@@ -20,6 +21,7 @@ use App\Services\Bookkeeping\BookkeepingCategoryService;
 use App\Services\Bookkeeping\BookkeepingQueryService;
 use App\Services\Bookkeeping\BookkeepingService;
 use App\Services\Bookkeeping\BookkeepingTransferService;
+use App\Services\Bookkeeping\LedgerService;
 use App\Services\Bookkeeping\LegacyCashSnapshot;
 use App\Services\Bookkeeping\LegacyTableSnapshot;
 use Illuminate\Database\QueryException;
@@ -46,6 +48,7 @@ class BookkeepingServiceTest extends TestCase
         'mcp_server_access',
         'mcp_operations',
         'audit_logs',
+        'bookkeeping_ledgers',
         'bookkeeping_categories',
         'bookkeeping_accounts',
         'bookkeeping_entries',
@@ -54,6 +57,8 @@ class BookkeepingServiceTest extends TestCase
         'bookkeeping_legacy_cash_reconciliations',
         'bookkeeping_legacy_retirements',
     ];
+
+    private Ledger $ledger;
 
     protected function tearDown(): void
     {
@@ -69,6 +74,7 @@ class BookkeepingServiceTest extends TestCase
         $user = User::factory()->create();
         $workspace = Workspace::factory()->create();
         $server = McpServer::factory()->create(['module_key' => 'zhendianpu']);
+        $this->ledger = Ledger::factory()->create(['name' => '经营账本']);
         DB::table('workspace_members')->insert(['workspace_id' => $workspace->id, 'user_id' => $user->id, 'role' => $role, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('mcp_server_access')->insert(['workspace_id' => $workspace->id, 'server_id' => $server->id, 'user_id' => $user->id, 'role' => $role, 'created_at' => now(), 'updated_at' => now()]);
 
@@ -78,9 +84,9 @@ class BookkeepingServiceTest extends TestCase
     public function test_creates_atomic_entries_and_replays_an_identical_event(): void
     {
         $context = $this->context();
-        $expense = Category::factory()->create(['direction' => 'expense']);
-        $income = Category::factory()->create(['direction' => 'income']);
-        $input = ['event_id' => (string) Str::ulid(), 'entries' => [['direction' => 'expense', 'amount' => '180.00', 'category_id' => $expense->id], ['direction' => 'income', 'amount' => '1200.00', 'category_id' => $income->id]]];
+        $expense = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $input = ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entries' => [['direction' => 'expense', 'amount' => '180.00', 'category_id' => $expense->id], ['direction' => 'income', 'amount' => '1200.00', 'category_id' => $income->id]]];
 
         $first = app(BookkeepingService::class)->add($context, $input);
         $second = app(BookkeepingService::class)->add($context, $input);
@@ -94,10 +100,10 @@ class BookkeepingServiceTest extends TestCase
     {
         $this->travelTo(Carbon::parse('2026-10-15 10:00:00', 'Asia/Shanghai'));
         $context = $this->context();
-        $income = Category::factory()->create(['direction' => 'income']);
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
 
         try {
-            app(BookkeepingService::class)->add($context, ['event_id' => (string) Str::ulid(), 'entries' => [['direction' => 'expense', 'amount' => '1.00', 'category_id' => $income->id, 'occurred_on' => '2026-10-16']]]);
+            app(BookkeepingService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entries' => [['direction' => 'expense', 'amount' => '1.00', 'category_id' => $income->id, 'occurred_on' => '2026-10-16']]]);
             $this->fail('Expected invalid category exception.');
         } catch (ValidationException) {
             $this->assertDatabaseCount('bookkeeping_entries', 0);
@@ -107,26 +113,26 @@ class BookkeepingServiceTest extends TestCase
     public function test_void_excludes_entry_from_summary_and_stale_revision_is_refused(): void
     {
         $context = $this->context();
-        $category = Category::factory()->create(['direction' => 'expense']);
-        $entry = app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '100.00', 'category_id' => $category->id], 'admin');
-        app(BookkeepingService::class)->void($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1]);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '100.00', 'category_id' => $category->id], 'admin');
+        app(BookkeepingService::class)->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1]);
 
-        $summary = app(BookkeepingQueryService::class)->summary($context, []);
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id]);
         $this->assertSame('0.00', $summary['totals']['expense']);
         $this->expectException(ValidationException::class);
-        app(BookkeepingService::class)->update($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1, 'description' => 'stale']);
+        app(BookkeepingService::class)->update($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1, 'description' => 'stale']);
     }
 
     public function test_summary_excludes_voided_entries_even_when_the_list_includes_them(): void
     {
         $context = $this->context();
-        $category = Category::factory()->create(['direction' => 'expense']);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
         $service = app(BookkeepingService::class);
-        $active = $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '9999999999.99', 'category_id' => $category->id], 'chatgpt');
-        $voided = $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '1.01', 'category_id' => $category->id], 'chatgpt');
-        $service->void($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
+        $active = $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '9999999999.99', 'category_id' => $category->id], 'chatgpt');
+        $voided = $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '1.01', 'category_id' => $category->id], 'chatgpt');
+        $service->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
 
-        $result = app(BookkeepingQueryService::class)->entries($context, ['include_voided' => true]);
+        $result = app(BookkeepingQueryService::class)->entries($context, ['ledger_id' => $this->ledger->public_id, 'include_voided' => true]);
 
         $this->assertCount(2, $result['records']);
         $this->assertSame('9999999999.99', $result['summary']['expense']);
@@ -136,13 +142,13 @@ class BookkeepingServiceTest extends TestCase
     public function test_summary_reports_expense_percentages_using_displayed_amount_precision(): void
     {
         $context = $this->context();
-        $first = Category::factory()->create(['direction' => 'expense']);
-        $second = Category::factory()->create(['direction' => 'expense']);
+        $first = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $second = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
         $service = app(BookkeepingService::class);
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '1.00', 'category_id' => $first->id], 'admin');
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '2.00', 'category_id' => $second->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '1.00', 'category_id' => $first->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '2.00', 'category_id' => $second->id], 'admin');
 
-        $summary = app(BookkeepingQueryService::class)->summary($context, []);
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id]);
         $percentages = collect($summary['categories'])->pluck('percentage', 'id');
 
         $this->assertSame('33.33', $percentages[$first->id]);
@@ -152,13 +158,13 @@ class BookkeepingServiceTest extends TestCase
     public function test_summary_returns_filtered_totals_and_category(): void
     {
         $context = $this->context();
-        $category = Category::factory()->create(['name' => '食材', 'direction' => 'expense']);
-        $otherCategory = Category::factory()->create(['direction' => 'expense']);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'name' => '食材', 'direction' => 'expense']);
+        $otherCategory = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
         $service = app(BookkeepingService::class);
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '12.50', 'category_id' => $category->id], 'admin');
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '20.00', 'category_id' => $otherCategory->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '12.50', 'category_id' => $category->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '20.00', 'category_id' => $otherCategory->id], 'admin');
 
-        $summary = app(BookkeepingQueryService::class)->summary($context, ['direction' => 'expense', 'category_id' => $category->id]);
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id, 'direction' => 'expense', 'category_id' => $category->id]);
 
         $this->assertSame(['income' => '0.00', 'expense' => '12.50', 'balance' => '-12.50'], $summary['totals']);
         $this->assertSame([['id' => $category->id, 'name' => '食材', 'direction' => 'expense', 'amount' => '12.50', 'percentage' => '100.00']], $summary['categories']);
@@ -167,13 +173,13 @@ class BookkeepingServiceTest extends TestCase
     public function test_filtered_totals_exclude_voided_entries(): void
     {
         $context = $this->context();
-        $first = Category::factory()->create(['direction' => 'expense']);
-        $second = Category::factory()->create(['direction' => 'expense']);
+        $first = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $second = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
         $service = app(BookkeepingService::class);
-        $active = $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '12.50', 'category_id' => $first->id], 'admin');
-        $voided = $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '8.00', 'category_id' => $first->id], 'admin');
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '20.00', 'category_id' => $second->id], 'admin');
-        $service->void($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
+        $active = $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '12.50', 'category_id' => $first->id], 'admin');
+        $voided = $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '8.00', 'category_id' => $first->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '20.00', 'category_id' => $second->id], 'admin');
+        $service->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
 
         $totals = app(BookkeepingQueryService::class)->totalsFor(Entry::query()->where('category_id', $first->id));
 
@@ -199,10 +205,10 @@ class BookkeepingServiceTest extends TestCase
     public function test_update_can_clear_description_without_changing_creation_source(): void
     {
         $context = $this->context();
-        $category = Category::factory()->create(['direction' => 'expense']);
-        $entry = app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id, 'description' => '原说明'], 'chatgpt');
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id, 'description' => '原说明'], 'chatgpt');
 
-        app(BookkeepingService::class)->update($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1, 'description' => null], 'admin');
+        app(BookkeepingService::class)->update($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1, 'description' => null], 'admin');
 
         $entry->refresh();
         $this->assertNull($entry->description);
@@ -214,15 +220,15 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $service = app(BookkeepingCategoryService::class);
-        $category = $service->create($context, ['name' => '临时支出', 'direction' => 'expense']);
-        app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
+        $category = $service->create($context, $this->ledger, ['name' => '临时支出', 'direction' => 'expense']);
+        app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
 
         try {
-            $service->update($context, $category, ['name' => '临时收入', 'direction' => 'income']);
+            $service->update($context, $this->ledger, $category, ['name' => '临时收入', 'direction' => 'income']);
             $this->fail('Expected a category direction validation exception.');
         } catch (ValidationException) {
-            $category = $service->update($context, $category, ['name' => '已改名支出', 'direction' => 'expense']);
-            $service->toggle($context, $category);
+            $category = $service->update($context, $this->ledger, $category, ['name' => '已改名支出', 'direction' => 'expense']);
+            $service->toggle($context, $this->ledger, $category);
         }
 
         $this->assertSame('已改名支出', $category->name);
@@ -246,6 +252,7 @@ class BookkeepingServiceTest extends TestCase
         request()->attributes->set('mcp.context', $context);
 
         ZhendianpuServer::tool(AddCategory::class, [
+            'ledger_id' => $this->ledger->public_id,
             'name' => '临时收入',
             'direction' => 'income',
         ])->assertOk()->assertStructuredContent(function ($response): void {
@@ -258,7 +265,7 @@ class BookkeepingServiceTest extends TestCase
 
         $category = Category::query()->sole();
 
-        ZhendianpuServer::tool(ListCategories::class, ['direction' => 'income'])
+        ZhendianpuServer::tool(ListCategories::class, ['ledger_id' => $this->ledger->public_id, 'direction' => 'income'])
             ->assertOk()
             ->assertStructuredContent(function ($response) use ($category): void {
                 $response->where('categories.0.id', $category->id)
@@ -268,12 +275,13 @@ class BookkeepingServiceTest extends TestCase
             });
 
         ZhendianpuServer::tool(UpdateCategory::class, [
+            'ledger_id' => $this->ledger->public_id,
             'category_id' => $category->id,
             'name' => '已改名收入',
             'direction' => 'income',
         ])->assertOk();
 
-        ZhendianpuServer::tool(ToggleCategory::class, ['category_id' => $category->id])->assertOk();
+        ZhendianpuServer::tool(ToggleCategory::class, ['ledger_id' => $this->ledger->public_id, 'category_id' => $category->id])->assertOk();
 
         $this->assertDatabaseHas('bookkeeping_categories', [
             'id' => $category->id,
@@ -286,52 +294,38 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $service = app(BookkeepingAccountService::class);
-        $default = $service->defaultAccount();
+        $default = $service->defaultAccount($this->ledger);
 
         $this->assertTrue($default->is_default);
         $this->expectException(ValidationException::class);
-        $service->update($context, $default, ['name' => $default->name, 'type' => $default->type, 'sort_order' => 0, 'is_active' => false]);
+        $service->update($context, $this->ledger, $default, ['name' => $default->name, 'type' => $default->type, 'sort_order' => 0, 'is_active' => false]);
     }
 
     public function test_non_default_accounts_are_null_and_the_unique_default_constraint_rejects_duplicates(): void
     {
         $context = $this->context();
         $service = app(BookkeepingAccountService::class);
-        $service->defaultAccount();
-        $first = $service->create($context, ['name' => '现金', 'type' => 'cash', 'sort_order' => 1, 'is_active' => true]);
-        $second = $service->create($context, ['name' => '银行卡', 'type' => 'bank_card', 'sort_order' => 2, 'is_active' => true]);
+        $service->defaultAccount($this->ledger);
+        $first = $service->create($context, $this->ledger, ['name' => '现金', 'type' => 'cash', 'sort_order' => 1, 'is_active' => true]);
+        $second = $service->create($context, $this->ledger, ['name' => '银行卡', 'type' => 'bank_card', 'sort_order' => 2, 'is_active' => true]);
 
         $this->assertDatabaseHas('bookkeeping_accounts', ['id' => $first->id, 'is_default' => null]);
         $this->assertDatabaseHas('bookkeeping_accounts', ['id' => $second->id, 'is_default' => null]);
 
         $this->expectException(QueryException::class);
-        Account::factory()->create(['is_default' => true]);
-    }
-
-    public function test_default_account_normalization_migration_converts_historical_false_values_to_null(): void
-    {
-        $historical = Account::factory()->create(['is_default' => false]);
-        $default = Account::factory()->create(['is_default' => true]);
-        $nonDefault = Account::factory()->create(['is_default' => null]);
-
-        $migration = require base_path('database/migrations/2026_10_16_120000_normalize_bookkeeping_account_default_values.php');
-        $migration->up();
-
-        $this->assertDatabaseHas('bookkeeping_accounts', ['id' => $historical->id, 'is_default' => null]);
-        $this->assertDatabaseHas('bookkeeping_accounts', ['id' => $default->id, 'is_default' => true]);
-        $this->assertDatabaseHas('bookkeeping_accounts', ['id' => $nonDefault->id, 'is_default' => null]);
+        Account::factory()->create(['ledger_id' => $this->ledger->id, 'is_default' => true]);
     }
 
     public function test_setting_defaults_sequentially_leaves_only_the_last_active_account_as_default(): void
     {
         $context = $this->context();
         $service = app(BookkeepingAccountService::class);
-        $service->defaultAccount();
-        $first = $service->create($context, ['name' => '现金', 'type' => 'cash', 'sort_order' => 1, 'is_active' => true]);
-        $second = $service->create($context, ['name' => '银行卡', 'type' => 'bank_card', 'sort_order' => 2, 'is_active' => true]);
+        $service->defaultAccount($this->ledger);
+        $first = $service->create($context, $this->ledger, ['name' => '现金', 'type' => 'cash', 'sort_order' => 1, 'is_active' => true]);
+        $second = $service->create($context, $this->ledger, ['name' => '银行卡', 'type' => 'bank_card', 'sort_order' => 2, 'is_active' => true]);
 
-        $service->setDefault($context, $first);
-        $service->setDefault($context, $second);
+        $service->setDefault($context, $this->ledger, $first);
+        $service->setDefault($context, $this->ledger, $second);
 
         $this->assertSame($second->id, Account::query()->where('is_default', true)->sole()->id);
         $this->assertDatabaseCount('bookkeeping_accounts', 3);
@@ -341,45 +335,45 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $accounts = app(BookkeepingAccountService::class);
-        $default = $accounts->defaultAccount();
-        $referenced = Account::factory()->create();
-        $category = Category::factory()->create(['direction' => 'expense']);
-        app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '1.00', 'category_id' => $category->id, 'account_id' => $referenced->id], 'admin');
+        $default = $accounts->defaultAccount($this->ledger);
+        $referenced = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '1.00', 'category_id' => $category->id, 'account_id' => $referenced->id], 'admin');
 
         try {
-            $accounts->delete($context, $default);
+            $accounts->delete($context, $this->ledger, $default);
             $this->fail('Expected default account deletion to fail.');
         } catch (ValidationException) {
             $this->expectException(ValidationException::class);
-            $accounts->delete($context, $referenced);
+            $accounts->delete($context, $this->ledger, $referenced);
         }
     }
 
     public function test_entries_default_to_the_default_account_and_filter_by_account(): void
     {
         $context = $this->context();
-        $category = Category::factory()->create(['direction' => 'expense']);
-        $entry = app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
 
-        $result = app(BookkeepingQueryService::class)->entries($context, ['account_id' => $entry->account_id]);
+        $result = app(BookkeepingQueryService::class)->entries($context, ['ledger_id' => $this->ledger->public_id, 'account_id' => $entry->account_id]);
         $this->assertSame($entry->account_id, $result['records'][0]['account_id']);
     }
 
     public function test_transfers_are_idempotent_voidable_and_do_not_change_entry_summary(): void
     {
         $context = $this->context();
-        $source = app(BookkeepingAccountService::class)->defaultAccount();
-        $destination = Account::factory()->create();
-        $input = ['event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50'];
+        $source = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $destination = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $input = ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50'];
         $service = app(BookkeepingTransferService::class);
 
         $first = $service->add($context, $input);
         $second = $service->add($context, $input);
-        $service->void($context, ['event_id' => (string) Str::ulid(), 'transfer_id' => $first['transfer']['id'], 'revision' => 1, 'void_reason' => '重复转账']);
+        $service->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'transfer_id' => $first['transfer']['id'], 'revision' => 1, 'void_reason' => '重复转账']);
 
         $this->assertFalse($first['replayed']);
         $this->assertTrue($second['replayed']);
-        $this->assertSame('0.00', app(BookkeepingQueryService::class)->summary($context, [])['totals']['balance']);
+        $this->assertSame('0.00', app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id])['totals']['balance']);
         $this->assertDatabaseHas('bookkeeping_transfers', ['id' => 1, 'voided_by' => $context->user->id, 'void_reason' => '重复转账']);
         $this->assertDatabaseHas('audit_logs', ['action' => 'bookkeeping.transfer.void', 'entity_id' => $first['transfer']['id']]);
     }
@@ -388,12 +382,12 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $accounts = app(BookkeepingAccountService::class);
-        $source = $accounts->defaultAccount();
-        $destination = Account::factory()->create();
-        $replacement = Account::factory()->create();
+        $source = $accounts->defaultAccount($this->ledger);
+        $destination = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $replacement = Account::factory()->create(['ledger_id' => $this->ledger->id]);
         $service = app(BookkeepingTransferService::class);
-        $created = $service->add($context, ['event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50']);
-        $input = ['event_id' => (string) Str::ulid(), 'transfer_id' => $created['transfer']['id'], 'revision' => 1, 'source_account_id' => $replacement->id, 'destination_account_id' => $source->id, 'amount' => '20.00', 'occurred_on' => '2026-10-15', 'description' => '调整后'];
+        $created = $service->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50']);
+        $input = ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'transfer_id' => $created['transfer']['id'], 'revision' => 1, 'source_account_id' => $replacement->id, 'destination_account_id' => $source->id, 'amount' => '20.00', 'occurred_on' => '2026-10-15', 'description' => '调整后'];
 
         $updated = $service->update($context, $input);
         $replayed = $service->update($context, $input);
@@ -403,7 +397,7 @@ class BookkeepingServiceTest extends TestCase
         $this->assertSame($replacement->id, $updated['transfer']['source_account_id']);
         $this->assertSame('调整后', $updated['transfer']['description']);
         $this->assertTrue($replayed['replayed']);
-        $this->assertSame('0.00', app(BookkeepingQueryService::class)->summary($context, [])['totals']['balance']);
+        $this->assertSame('0.00', app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id])['totals']['balance']);
         $this->assertDatabaseHas('audit_logs', ['action' => 'bookkeeping.transfer.update', 'entity_id' => $created['transfer']['id']]);
 
         $this->expectException(ValidationException::class);
@@ -413,12 +407,12 @@ class BookkeepingServiceTest extends TestCase
     public function test_transfer_update_rejects_requests_without_editable_fields_without_writes(): void
     {
         $context = $this->context();
-        $source = app(BookkeepingAccountService::class)->defaultAccount();
-        $destination = Account::factory()->create();
-        $created = app(BookkeepingTransferService::class)->add($context, ['event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50']);
+        $source = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $destination = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $created = app(BookkeepingTransferService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50']);
 
         try {
-            app(BookkeepingTransferService::class)->update($context, ['event_id' => (string) Str::ulid(), 'transfer_id' => $created['transfer']['id'], 'revision' => 1]);
+            app(BookkeepingTransferService::class)->update($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'transfer_id' => $created['transfer']['id'], 'revision' => 1]);
             $this->fail('Expected an editable field validation exception.');
         } catch (ValidationException $exception) {
             $this->assertSame(['至少提供一个可编辑字段。'], $exception->errors()['arguments']);
@@ -432,16 +426,111 @@ class BookkeepingServiceTest extends TestCase
     public function test_writes_reject_inactive_accounts(): void
     {
         $context = $this->context();
-        $inactive = Account::factory()->create(['is_active' => false]);
-        $active = app(BookkeepingAccountService::class)->defaultAccount();
-        $category = Category::factory()->create(['direction' => 'income']);
+        $inactive = Account::factory()->create(['ledger_id' => $this->ledger->id, 'is_active' => false]);
+        $active = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
 
         try {
-            app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'income', 'amount' => '10.00', 'category_id' => $category->id, 'account_id' => $inactive->id], 'admin');
+            app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '10.00', 'category_id' => $category->id, 'account_id' => $inactive->id], 'admin');
             $this->fail('Expected inactive account validation exception.');
         } catch (ValidationException) {
             $this->expectException(ValidationException::class);
-            app(BookkeepingTransferService::class)->add($context, ['event_id' => (string) Str::ulid(), 'source_account_id' => $active->id, 'destination_account_id' => $inactive->id, 'amount' => '1.00']);
+            app(BookkeepingTransferService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $active->id, 'destination_account_id' => $inactive->id, 'amount' => '1.00']);
+        }
+    }
+
+    public function test_ledger_entries_are_isolated_from_other_ledgers(): void
+    {
+        $context = $this->context();
+        $otherLedger = Ledger::factory()->create();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $otherCategory = Category::factory()->create(['ledger_id' => $otherLedger->id, 'direction' => 'income']);
+        $service = app(BookkeepingService::class);
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
+        $service->createEntry($context->user, $otherLedger, ['direction' => 'income', 'amount' => '20.00', 'category_id' => $otherCategory->id], 'admin');
+
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id]);
+
+        $this->assertSame('10.00', $summary['totals']['income']);
+        $this->assertDatabaseCount('bookkeeping_entries', 2);
+    }
+
+    public function test_current_ledger_is_scoped_to_the_user_session_and_falls_back_when_archived(): void
+    {
+        $context = $this->context();
+        $otherLedger = Ledger::factory()->create(['name' => '个人账本']);
+        $service = app(LedgerService::class);
+
+        $service->selectCurrent($context->user, $otherLedger);
+
+        $this->assertSame($otherLedger->id, $service->current($context->user)->id);
+        $this->assertSame($this->ledger->id, $service->current(User::factory()->create())->id);
+
+        $otherLedger->update(['status' => 'archived']);
+
+        $this->assertSame($this->ledger->id, $service->current($context->user)->id);
+    }
+
+    public function test_entries_reject_parent_categories_without_writes(): void
+    {
+        $context = $this->context();
+        $parent = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        Category::factory()->create(['ledger_id' => $this->ledger->id, 'parent_id' => $parent->id, 'direction' => 'expense']);
+
+        try {
+            app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $parent->id], 'admin');
+            $this->fail('Expected parent category validation exception.');
+        } catch (ValidationException) {
+            $this->assertDatabaseCount('bookkeeping_entries', 0);
+        }
+    }
+
+    public function test_transfers_reject_accounts_from_another_ledger_without_writes(): void
+    {
+        $context = $this->context();
+        $source = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $otherAccount = Account::factory()->create(['ledger_id' => Ledger::factory()->create()->id]);
+
+        try {
+            app(BookkeepingTransferService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $otherAccount->id, 'amount' => '1.00']);
+            $this->fail('Expected cross-ledger transfer validation exception.');
+        } catch (ValidationException) {
+            $this->assertDatabaseCount('bookkeeping_transfers', 0);
+        }
+    }
+
+    public function test_archived_ledger_rejects_entry_writes_without_creating_operations(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $this->ledger->update(['status' => 'archived']);
+
+        try {
+            app(BookkeepingService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entries' => [['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id]]]);
+            $this->fail('Expected archived ledger validation exception.');
+        } catch (ValidationException) {
+            $this->assertDatabaseCount('bookkeeping_entries', 0);
+            $this->assertDatabaseCount('mcp_operations', 0);
+        }
+    }
+
+    public function test_archived_ledger_cannot_be_updated_or_archived_again(): void
+    {
+        $this->context();
+        $this->ledger->update(['status' => 'archived']);
+
+        foreach ([
+            fn (): Ledger => app(LedgerService::class)->update($this->ledger, ['name' => '已归档账本']),
+            fn (): Ledger => app(LedgerService::class)->archive($this->ledger),
+        ] as $operation) {
+            try {
+                $operation();
+                $this->fail('Expected archived ledger validation exception.');
+            } catch (ValidationException) {
+                $this->ledger->refresh();
+                $this->assertSame('archived', $this->ledger->status);
+                $this->assertSame(1, $this->ledger->revision);
+            }
         }
     }
 
@@ -449,15 +538,15 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $accounts = app(BookkeepingAccountService::class);
-        $source = $accounts->defaultAccount();
-        $destination = Account::factory()->create();
-        $category = Category::factory()->create(['direction' => 'income']);
-        app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'income', 'amount' => '10.00', 'category_id' => $category->id, 'account_id' => $source->id], 'admin');
-        app(BookkeepingTransferService::class)->add($context, ['event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '2.50']);
+        $source = $accounts->defaultAccount($this->ledger);
+        $destination = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '10.00', 'category_id' => $category->id, 'account_id' => $source->id], 'admin');
+        app(BookkeepingTransferService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '2.50']);
 
         DB::flushQueryLog();
         DB::enableQueryLog();
-        $balances = $accounts->accountsWithBalances()->orderBy('id')->get()->mapWithKeys(fn (Account $account): array => [$account->id => $account->balance]);
+        $balances = $accounts->accountsWithBalances($this->ledger)->orderBy('id')->get()->mapWithKeys(fn (Account $account): array => [$account->id => $account->balance]);
         $queries = DB::getQueryLog();
         DB::disableQueryLog();
 
@@ -469,22 +558,22 @@ class BookkeepingServiceTest extends TestCase
     public function test_account_balance_includes_the_opening_balance_without_affecting_income_or_expense(): void
     {
         $context = $this->context();
-        $account = app(BookkeepingAccountService::class)->create($context, [
+        $account = app(BookkeepingAccountService::class)->create($context, $this->ledger, [
             'name' => '现金',
             'type' => 'cash',
             'opening_balance' => '100.00',
             'is_active' => true,
         ]);
-        $income = Category::factory()->create(['direction' => 'income']);
-        app(BookkeepingService::class)->createEntry($context->user, [
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        app(BookkeepingService::class)->createEntry($context->user, $this->ledger, [
             'direction' => 'income',
             'amount' => '25.00',
             'category_id' => $income->id,
             'account_id' => $account->id,
         ], 'admin');
 
-        $balance = app(BookkeepingAccountService::class)->accountsWithBalances()->whereKey($account->id)->value('balance');
-        $summary = app(BookkeepingQueryService::class)->summary($context, []);
+        $balance = app(BookkeepingAccountService::class)->accountsWithBalances($this->ledger)->whereKey($account->id)->value('balance');
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id]);
 
         $this->assertSame('125.00', (string) $balance);
         $this->assertSame('25.00', $summary['totals']['income']);
@@ -494,15 +583,15 @@ class BookkeepingServiceTest extends TestCase
     public function test_account_balance_aggregate_preserves_values_beyond_the_source_decimal_range(): void
     {
         $context = $this->context();
-        $account = app(BookkeepingAccountService::class)->defaultAccount();
-        $category = Category::factory()->create(['direction' => 'income']);
+        $account = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
         $service = app(BookkeepingService::class);
 
         for ($index = 0; $index < 101; $index++) {
-            $service->createEntry($context->user, ['direction' => 'income', 'amount' => '9999999999.99', 'category_id' => $category->id, 'account_id' => $account->id], 'admin');
+            $service->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '9999999999.99', 'category_id' => $category->id, 'account_id' => $account->id], 'admin');
         }
 
-        $balance = app(BookkeepingAccountService::class)->accountsWithBalances()->whereKey($account->id)->value('balance');
+        $balance = app(BookkeepingAccountService::class)->accountsWithBalances($this->ledger)->whereKey($account->id)->value('balance');
 
         $this->assertSame('1009999999998.99', (string) $balance);
     }
@@ -511,18 +600,18 @@ class BookkeepingServiceTest extends TestCase
     {
         $context = $this->context();
         $accounts = app(BookkeepingAccountService::class);
-        $source = $accounts->defaultAccount();
-        $destination = Account::factory()->create(['name' => '现金']);
-        $income = Category::factory()->create(['name' => '营业收入', 'direction' => 'income']);
-        $expense = Category::factory()->create(['name' => '食材', 'direction' => 'expense']);
+        $source = $accounts->defaultAccount($this->ledger);
+        $destination = Account::factory()->create(['ledger_id' => $this->ledger->id, 'name' => '现金']);
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'name' => '营业收入', 'direction' => 'income']);
+        $expense = Category::factory()->create(['ledger_id' => $this->ledger->id, 'name' => '食材', 'direction' => 'expense']);
         $service = app(BookkeepingService::class);
-        $service->createEntry($context->user, ['direction' => 'income', 'amount' => '100.00', 'category_id' => $income->id, 'occurred_on' => '2026-10-01', 'account_id' => $source->id], 'admin');
-        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '25.00', 'category_id' => $expense->id, 'occurred_on' => '2026-10-03', 'account_id' => $source->id], 'admin');
-        $voided = $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '40.00', 'category_id' => $expense->id, 'occurred_on' => '2026-10-02', 'account_id' => $source->id], 'admin');
-        $service->void($context, ['event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
-        app(BookkeepingTransferService::class)->add($context, ['event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50', 'occurred_on' => '2026-10-03']);
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '100.00', 'category_id' => $income->id, 'occurred_on' => '2026-10-01', 'account_id' => $source->id], 'admin');
+        $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '25.00', 'category_id' => $expense->id, 'occurred_on' => '2026-10-03', 'account_id' => $source->id], 'admin');
+        $voided = $service->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '40.00', 'category_id' => $expense->id, 'occurred_on' => '2026-10-02', 'account_id' => $source->id], 'admin');
+        $service->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $voided->public_id, 'revision' => 1]);
+        app(BookkeepingTransferService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'source_account_id' => $source->id, 'destination_account_id' => $destination->id, 'amount' => '12.50', 'occurred_on' => '2026-10-03']);
 
-        $dashboard = app(BookkeepingQueryService::class)->dashboard($context, ['start_date' => '2026-10-01', 'end_date' => '2026-10-03']);
+        $dashboard = app(BookkeepingQueryService::class)->dashboard($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-01', 'end_date' => '2026-10-03']);
 
         $this->assertSame(['2026-10-01', '2026-10-02', '2026-10-03'], $dashboard['trend']['labels']);
         $this->assertSame(['100.00', '0.00', '0.00'], $dashboard['trend']['datasets'][0]['data']);
@@ -541,7 +630,7 @@ class BookkeepingServiceTest extends TestCase
         $context = $this->context();
 
         try {
-            app(BookkeepingQueryService::class)->dashboard($context, ['start_date' => '2026-10-16', 'end_date' => '2026-10-15']);
+            app(BookkeepingQueryService::class)->dashboard($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-16', 'end_date' => '2026-10-15']);
             $this->fail('Expected a reversed date range validation exception.');
         } catch (ValidationException $exception) {
             $this->assertSame(['开始日期不得晚于结束日期。'], $exception->errors()['start_date']);
@@ -549,7 +638,7 @@ class BookkeepingServiceTest extends TestCase
 
         $this->expectException(ValidationException::class);
         $this->expectExceptionMessage('日期范围最多为 1096 天。');
-        app(BookkeepingQueryService::class)->dashboard($context, ['start_date' => '2023-10-15', 'end_date' => '2026-10-16']);
+        app(BookkeepingQueryService::class)->dashboard($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2023-10-15', 'end_date' => '2026-10-16']);
     }
 
     public function test_reconciliation_schema_migration_does_not_retire_legacy_cash_rows(): void
@@ -717,8 +806,8 @@ class BookkeepingServiceTest extends TestCase
         $this->createLegacyCashTable();
         $source = ['id' => 1, 'business_on' => '2026-10-01', 'direction' => 'out', 'amount' => '10.00'];
         DB::table('zdp_cash_transactions')->insert($source);
-        $category = Category::factory()->create(['direction' => 'expense']);
-        $entry = app(BookkeepingService::class)->createEntry($context->user, ['direction' => 'expense', 'amount' => '9.99', 'category_id' => $category->id, 'occurred_on' => '2026-10-01'], 'legacy_import');
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '9.99', 'category_id' => $category->id, 'occurred_on' => '2026-10-01'], 'legacy_import');
         $snapshot = LegacyCashSnapshot::capture(DB::table('zdp_cash_transactions')->where('id', 1)->first());
         $this->confirmRetirement(1);
         DB::table('bookkeeping_legacy_imports')->insert(['source_table' => 'zdp_cash_transactions', 'source_id' => 1, 'entry_id' => $entry->id, 'created_at' => now(), 'updated_at' => now()]);

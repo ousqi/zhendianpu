@@ -3,6 +3,7 @@
 namespace Database\Factories\Bookkeeping;
 
 use App\Models\Bookkeeping\Category;
+use App\Models\Bookkeeping\Ledger;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -18,8 +19,10 @@ class CategoryFactory extends Factory
     public function definition(): array
     {
         return [
+            'ledger_id' => Ledger::factory(),
             'name' => fake()->unique()->word(),
             'direction' => 'expense',
+            'sort_order' => 0,
             'is_active' => true,
         ];
     }

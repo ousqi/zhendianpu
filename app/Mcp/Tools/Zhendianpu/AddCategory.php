@@ -16,7 +16,7 @@ class AddCategory extends BookkeepingTool
 {
     protected function respond(AccessContext $context, Request $request): array
     {
-        $category = app(BookkeepingCategoryService::class)->create($context, $request->all());
+        $category = app(BookkeepingCategoryService::class)->create($context, $this->ledger($request), $request->all());
 
         return [
             'ok' => true,
@@ -24,6 +24,8 @@ class AddCategory extends BookkeepingTool
                 'id' => $category->id,
                 'name' => $category->name,
                 'direction' => $category->direction,
+                'parent_id' => $category->parent_id,
+                'sort_order' => $category->sort_order,
                 'is_active' => $category->is_active,
             ],
             'request_id' => $context->requestId,
@@ -34,8 +36,11 @@ class AddCategory extends BookkeepingTool
     public function schema(JsonSchema $schema): array
     {
         return [
+            'ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(),
             'name' => $schema->string()->max(255)->required(),
             'direction' => $schema->string()->enum(['income', 'expense'])->required(),
+            'parent_id' => $schema->integer()->min(1)->nullable(),
+            'sort_order' => $schema->integer()->min(0)->nullable(),
         ];
     }
 }

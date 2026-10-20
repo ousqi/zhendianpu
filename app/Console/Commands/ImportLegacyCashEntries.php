@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
 use App\Services\Bookkeeping\BookkeepingAccountService;
+use App\Services\Bookkeeping\LedgerService;
 use App\Services\Bookkeeping\LegacyCashSnapshot;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -65,9 +66,11 @@ class ImportLegacyCashEntries extends Command
                 }
 
                 $direction = $row->direction === 'in' ? 'income' : 'expense';
-                $category = Category::firstOrCreate(['name' => $direction === 'income' ? '其他收入' : '其他支出', 'direction' => $direction]);
-                $account = app(BookkeepingAccountService::class)->defaultAccount();
+                $ledger = app(LedgerService::class)->legacyBusinessLedger();
+                $category = Category::firstOrCreate(['ledger_id' => $ledger->id, 'name' => $direction === 'income' ? '其他收入' : '其他支出', 'direction' => $direction]);
+                $account = app(BookkeepingAccountService::class)->defaultAccount($ledger);
                 $entry = Entry::create([
+                    'ledger_id' => $ledger->id,
                     'direction' => $direction,
                     'amount' => $row->amount,
                     'category_id' => $category->id,

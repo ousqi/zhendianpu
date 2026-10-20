@@ -33,6 +33,11 @@ class Entry extends Model
         return $this->belongsTo(Category::class);
     }
 
+    public function ledger(): BelongsTo
+    {
+        return $this->belongsTo(Ledger::class);
+    }
+
     public function account(): BelongsTo
     {
         return $this->belongsTo(Account::class);

@@ -5,6 +5,7 @@ namespace Database\Factories\Bookkeeping;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
+use App\Models\Bookkeeping\Ledger;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -13,18 +14,15 @@ use Illuminate\Database\Eloquent\Factories\Factory;
  */
 class EntryFactory extends Factory
 {
-    /**
-     * Define the model's default state.
-     *
-     * @return array<string, mixed>
-     */
+    /** @return array<string, mixed> */
     public function definition(): array
     {
         return [
+            'ledger_id' => Ledger::factory(),
             'direction' => 'expense',
             'amount' => '10.00',
-            'category_id' => Category::factory(),
-            'account_id' => Account::factory(),
+            'category_id' => fn (array $attributes): int => Category::factory()->create(['ledger_id' => $attributes['ledger_id']])->id,
+            'account_id' => fn (array $attributes): int => Account::factory()->create(['ledger_id' => $attributes['ledger_id']])->id,
             'occurred_on' => now('Asia/Shanghai')->toDateString(),
             'source' => 'admin',
             'created_by' => User::factory(),
