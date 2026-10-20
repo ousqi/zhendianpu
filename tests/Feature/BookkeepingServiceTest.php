@@ -3,6 +3,11 @@
 namespace Tests\Feature;
 
 use App\Data\Mcp\AccessContext;
+use App\Mcp\Servers\ZhendianpuServer;
+use App\Mcp\Tools\Zhendianpu\AddCategory;
+use App\Mcp\Tools\Zhendianpu\ListCategories;
+use App\Mcp\Tools\Zhendianpu\ToggleCategory;
+use App\Mcp\Tools\Zhendianpu\UpdateCategory;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
@@ -223,6 +228,58 @@ class BookkeepingServiceTest extends TestCase
         $this->assertSame('已改名支出', $category->name);
         $this->assertFalse($category->refresh()->is_active);
         $this->assertDatabaseCount('audit_logs', 3);
+    }
+
+    public function test_category_management_tools_are_registered(): void
+    {
+        ZhendianpuServer::tools()->assertRegistered([
+            ListCategories::class,
+            AddCategory::class,
+            UpdateCategory::class,
+            ToggleCategory::class,
+        ]);
+    }
+
+    public function test_category_management_tools_create_list_update_and_toggle_categories(): void
+    {
+        $context = $this->context();
+        request()->attributes->set('mcp.context', $context);
+
+        ZhendianpuServer::tool(AddCategory::class, [
+            'name' => '临时收入',
+            'direction' => 'income',
+        ])->assertOk()->assertStructuredContent(function ($response): void {
+            $response->where('ok', true)
+                ->where('category.name', '临时收入')
+                ->where('category.direction', 'income')
+                ->where('category.is_active', true)
+                ->etc();
+        });
+
+        $category = Category::query()->sole();
+
+        ZhendianpuServer::tool(ListCategories::class, ['direction' => 'income'])
+            ->assertOk()
+            ->assertStructuredContent(function ($response) use ($category): void {
+                $response->where('categories.0.id', $category->id)
+                    ->where('categories.0.name', '临时收入')
+                    ->where('categories.0.is_active', true)
+                    ->etc();
+            });
+
+        ZhendianpuServer::tool(UpdateCategory::class, [
+            'category_id' => $category->id,
+            'name' => '已改名收入',
+            'direction' => 'income',
+        ])->assertOk();
+
+        ZhendianpuServer::tool(ToggleCategory::class, ['category_id' => $category->id])->assertOk();
+
+        $this->assertDatabaseHas('bookkeeping_categories', [
+            'id' => $category->id,
+            'name' => '已改名收入',
+            'is_active' => false,
+        ]);
     }
 
     public function test_default_account_is_created_automatically_and_cannot_be_disabled_or_deleted(): void

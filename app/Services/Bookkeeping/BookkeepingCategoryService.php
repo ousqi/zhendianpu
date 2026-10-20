@@ -22,7 +22,7 @@ class BookkeepingCategoryService
         ])->validate();
 
         return DB::transaction(function () use ($context, $data): Category {
-            $category = Category::create($data);
+            $category = Category::create($data)->refresh();
             $this->audit($context, 'bookkeeping.category.created', $category, null, $this->present($category));
 
             return $category;

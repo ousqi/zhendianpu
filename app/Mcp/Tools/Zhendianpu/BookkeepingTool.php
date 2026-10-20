@@ -4,6 +4,7 @@ namespace App\Mcp\Tools\Zhendianpu;
 
 use App\Data\Mcp\AccessContext;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\JsonSchema\Types\Type;
 use Illuminate\Validation\ValidationException;
 use Laravel\Mcp\Request;
@@ -25,6 +26,8 @@ abstract class BookkeepingTool extends Tool
             return Response::structured($this->respond($context, $request));
         } catch (ValidationException $exception) {
             return Response::error(json_encode(['ok' => false, 'code' => 'INVALID_ARGUMENT', 'fields' => $exception->errors(), 'request_id' => $context->requestId], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+        } catch (ModelNotFoundException) {
+            return Response::error(json_encode(['ok' => false, 'code' => 'INVALID_ARGUMENT', 'request_id' => $context->requestId], JSON_THROW_ON_ERROR));
         } catch (HttpException $exception) {
             return Response::error(json_encode(['ok' => false, 'code' => $exception->getStatusCode() === 403 ? 'FORBIDDEN' : 'INVALID_ARGUMENT', 'request_id' => $context->requestId], JSON_THROW_ON_ERROR));
         } catch (Throwable $exception) {
