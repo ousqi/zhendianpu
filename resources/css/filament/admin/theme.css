@@ -1,0 +1,107 @@
+@import '../../../../vendor/filament/filament/resources/css/theme.css';
+
+@source '../../../../app/Filament/**/*.php';
+@source '../../../../resources/views/filament/**/*.blade.php';
+
+.bookkeeping-overview .fi-wi-chart-canvas-ctn {
+    min-height: 14rem;
+}
+
+.bookkeeping-overview .bookkeeping-overview-trend .fi-wi-chart-canvas-ctn {
+    min-height: 18rem;
+}
+
+.bookkeeping-overview .overview-detail-table {
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-color: rgb(226 232 240);
+    border-radius: 0.875rem;
+    box-shadow: 0 4px 14px rgb(15 23 42 / 0.06);
+}
+
+.bookkeeping-overview .overview-chart-group {
+    overflow: hidden;
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.875rem;
+    background: white;
+    box-shadow: 0 4px 14px rgb(15 23 42 / 0.06);
+}
+
+.bookkeeping-overview .overview-chart-group .fi-wi-chart .fi-section {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.bookkeeping-overview .overview-chart-group .overview-detail-table {
+    margin-top: 0;
+    border: 0;
+    border-top: 1px solid rgb(226 232 240);
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.bookkeeping-overview .overview-detail-table table {
+    border-collapse: collapse;
+}
+
+.bookkeeping-overview .overview-detail-table thead {
+    background: linear-gradient(135deg, rgb(248 250 252), rgb(241 245 249));
+}
+
+.bookkeeping-overview .overview-detail-table th {
+    padding: 0.8rem 1rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.bookkeeping-overview .overview-detail-table td {
+    padding: 0.8rem 1rem;
+}
+
+.bookkeeping-overview .overview-detail-table tbody tr {
+    transition: background-color 150ms ease;
+}
+
+.bookkeeping-overview .overview-detail-table tbody tr:nth-child(even) {
+    background-color: rgb(248 250 252 / 0.65);
+}
+
+.bookkeeping-overview .overview-detail-table tbody tr:hover {
+    background-color: rgb(236 253 245);
+}
+
+.dark .bookkeeping-overview .overview-detail-table {
+    border-color: rgb(55 65 81);
+    box-shadow: none;
+}
+
+.dark .bookkeeping-overview .overview-chart-group {
+    border-color: rgb(55 65 81);
+    background: rgb(17 24 39);
+    box-shadow: none;
+}
+
+.dark .bookkeeping-overview .overview-chart-group .overview-detail-table {
+    border-top-color: rgb(55 65 81);
+}
+
+.dark .bookkeeping-overview .overview-detail-table thead {
+    background: linear-gradient(135deg, rgb(31 41 55), rgb(17 24 39));
+}
+
+.dark .bookkeeping-overview .overview-detail-table tbody tr:nth-child(even) {
+    background-color: rgb(31 41 55 / 0.45);
+}
+
+.dark .bookkeeping-overview .overview-detail-table tbody tr:hover {
+    background-color: rgb(6 78 59 / 0.28);
+}
+
+@media (max-width: 639px) {
+    .bookkeeping-overview .fi-wi-chart-canvas-ctn,
+    .bookkeeping-overview .bookkeeping-overview-trend .fi-wi-chart-canvas-ctn {
+        min-height: 13rem;
+    }
+}
