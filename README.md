@@ -312,6 +312,21 @@ npm install
 npm run dev
 ```
 
+若 `app` PHP 容器未安装 Node.js/npm，不要在容器内运行 `npm ci`。可在项目根目录使用一次性的 Node 容器生成生产资源：
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD":/app \
+  -w /app \
+  node:22-bookworm \
+  sh -lc 'npm ci && npm run build'
+
+ls -la public/build
+```
+
+`--rm` 仅在构建结束后删除临时 Node 容器；`public/build/` 写入的是宿主机项目目录，因此普通的 `docker compose down` 不会删除它。即使执行 `docker compose down -v`，宿主机目录中的构建产物通常仍会保留，但 Docker 命名卷中的数据会被删除。生产环境应将项目目录持久化在宿主机或镜像内，并确认它已挂载到 PHP 容器使用的项目路径；不要只把代码和构建产物保存在可删除的容器文件系统中。
+
 不要在生产数据库上运行测试、`migrate:fresh`、`db:wipe` 或其他会删除/重建数据的命令。
 
 ## 许可证
