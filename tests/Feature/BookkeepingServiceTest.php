@@ -144,6 +144,21 @@ class BookkeepingServiceTest extends TestCase
         $this->assertSame('66.66', $percentages[$second->id]);
     }
 
+    public function test_summary_returns_filtered_totals_and_category(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['name' => '食材', 'direction' => 'expense']);
+        $otherCategory = Category::factory()->create(['direction' => 'expense']);
+        $service = app(BookkeepingService::class);
+        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '12.50', 'category_id' => $category->id], 'admin');
+        $service->createEntry($context->user, ['direction' => 'expense', 'amount' => '20.00', 'category_id' => $otherCategory->id], 'admin');
+
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['direction' => 'expense', 'category_id' => $category->id]);
+
+        $this->assertSame(['income' => '0.00', 'expense' => '12.50', 'balance' => '-12.50'], $summary['totals']);
+        $this->assertSame([['id' => $category->id, 'name' => '食材', 'direction' => 'expense', 'amount' => '12.50', 'percentage' => '100.00']], $summary['categories']);
+    }
+
     public function test_filtered_totals_exclude_voided_entries(): void
     {
         $context = $this->context();

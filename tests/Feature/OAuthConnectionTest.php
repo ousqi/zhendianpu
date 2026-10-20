@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Laravel\Passport\Passport;
 use Tests\TestCase;
 
 class OAuthConnectionTest extends TestCase
@@ -27,6 +28,20 @@ class OAuthConnectionTest extends TestCase
     {
         $this->postJson('/oauth/register', ['redirect_uris' => ['https://chatgpt.com.evil.example/callback']])
             ->assertStatus(400)->assertJsonPath('error', 'invalid_redirect_uri');
+    }
+
+    public function test_authenticated_tools_list_includes_void_transfer_reason_limit(): void
+    {
+        $user = User::factory()->create();
+        $this->artisan('platform:initialize', ['--email' => $user->email])->assertSuccessful();
+        Passport::actingAs($user, ['mcp:use']);
+
+        $response = $this->postJson('/mcp/zhendianpu', ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list'])
+            ->assertOk();
+        $voidTransfer = collect($response->json('result.tools'))->firstWhere('name', 'void_transfer');
+
+        $this->assertIsArray($voidTransfer);
+        $this->assertSame(1000, data_get($voidTransfer, 'inputSchema.properties.void_reason.maxLength'));
     }
 
     public function test_real_pkce_authorization_tokens_refresh_and_revocation(): void

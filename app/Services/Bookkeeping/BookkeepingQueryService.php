@@ -120,12 +120,12 @@ class BookkeepingQueryService
     /** @param array<string, mixed> $input */
     private function query(array $input): Builder
     {
-        return Entry::query()->whereBetween('occurred_on', [$input['start_date'], $input['end_date']])
-            ->when(empty($input['include_voided']), fn (Builder $query): Builder => $query->whereNull('voided_at'))
-            ->when(isset($input['direction']), fn (Builder $query): Builder => $query->where('direction', $input['direction']))
-            ->when(isset($input['category_id']), fn (Builder $query): Builder => $query->where('category_id', $input['category_id']))
-            ->when(isset($input['account_id']), fn (Builder $query): Builder => $query->where('account_id', $input['account_id']))
-            ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('description', 'like', '%'.$input['keyword'].'%'));
+        return Entry::query()->whereBetween('bookkeeping_entries.occurred_on', [$input['start_date'], $input['end_date']])
+            ->when(empty($input['include_voided']), fn (Builder $query): Builder => $query->whereNull('bookkeeping_entries.voided_at'))
+            ->when(isset($input['direction']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.direction', $input['direction']))
+            ->when(isset($input['category_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.category_id', $input['category_id']))
+            ->when(isset($input['account_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.account_id', $input['account_id']))
+            ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.description', 'like', '%'.$input['keyword'].'%'));
     }
 
     private function totals(Builder $query): array

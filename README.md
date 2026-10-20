@@ -84,7 +84,25 @@ php artisan migrate --force
 
 这会创建应用、会话、缓存、队列、OAuth 和记账所需的数据表。上线已有历史数据的环境前，请先完成可恢复备份并在预发布环境演练；不要使用 `migrate:fresh`，它会删除数据。
 
-### 4. 初始化店主、权限和默认分类
+### 4. 生成并保护 Passport OAuth 密钥
+
+MCP 授权依赖 Laravel Passport 的 RSA 密钥。首次部署、且 `storage/oauth-private.key` 与 `storage/oauth-public.key` 都不存在时生成一次：
+
+```bash
+php artisan passport:keys
+```
+
+使用 Docker Compose 的生产环境应在 `app` 容器内执行（以下容器内项目路径仅为示例）：
+
+```bash
+docker compose exec -T -w /var/www/html/zhendianpu app php artisan passport:keys --no-interaction
+```
+
+这两个密钥必须作为部署密钥持久化保存，并在每次发布时保留同一对密钥；不要提交到仓库，也不要将其写入镜像。应用的 PHP 运行用户必须可读取它们。若密钥丢失或重新生成，所有现有的 MCP OAuth Access Token 和 Refresh Token 都会失效，客户端必须重新授权。
+
+密钥已存在时，**不要**使用 `passport:keys --force`。只有确认旧密钥无法恢复并已接受令牌失效影响时，才可生成新密钥。
+
+### 5. 初始化店主、权限和默认分类
 
 首次部署需创建店主账号并授予服务访问权：
 
@@ -108,7 +126,7 @@ php artisan platform:initialize \
 
 重复执行不会覆盖已有账号密码或业务数据。首次登录后请立即修改初始密码，并在后台创建实际使用的账户及默认账户。
 
-### 5. 配置目录权限和 Nginx
+### 6. 配置目录权限和 Nginx
 
 Laravel 必须能写入 `storage/` 和 `bootstrap/cache/`：
 
@@ -155,7 +173,7 @@ server {
 
 启用站点、通过 `nginx -t` 检查配置后重载 Nginx。请使用受信任 CA 签发的证书；MCP OAuth 不应部署在 HTTP 或自签名证书的公网端点上。
 
-### 6. 缓存、队列与定时任务
+### 7. 缓存、队列与定时任务
 
 ```bash
 php artisan optimize
@@ -175,7 +193,7 @@ Restart=always
 
 配置并启动后，确认队列进程状态。若以后添加了 Laravel 定时任务，再额外配置每分钟执行一次 `php artisan schedule:run` 的系统 cron。
 
-### 7. 上线检查
+### 8. 上线检查
 
 ```bash
 php artisan about
@@ -203,6 +221,14 @@ php artisan queue:restart
 部署后检查后台登录、关键账目查询和 MCP 授权流程。若迁移涉及历史业务表，请先完成完整、可恢复的备份和变更评审；切勿为了回滚而直接删除生产表。
 
 ## MCP 连接信息
+
+在 MCP 客户端的「服务器 URL」或「MCP 链接」输入框中，填写：
+
+```text
+https://<你的生产域名>/mcp/zhendianpu
+```
+
+例如生产域名为 `mcp.example.com` 时，填写 `https://mcp.example.com/mcp/zhendianpu`。不要填写 `/oauth/authorize`、`/oauth/token` 或后台 `/admin` 地址；客户端会根据 MCP 地址自动发现并发起 OAuth 授权。
 
 | 服务 | MCP 地址 | 用途 | 权限 |
 |---|---|---|---|
