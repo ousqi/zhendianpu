@@ -4,14 +4,18 @@ namespace Tests\Feature;
 
 use App\Filament\Pages\BookkeepingCategories;
 use App\Models\Bookkeeping\Category;
+use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
 use App\Models\McpServer;
 use App\Models\User;
 use App\Models\Workspace;
+use App\Services\Bookkeeping\BookkeepingCategoryService;
 use App\Services\Bookkeeping\LedgerService;
 use Filament\Forms\Components\Select;
+use Filament\Notifications\Notification;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -143,6 +147,66 @@ class BookkeepingCategoriesTest extends TestCase
             ->call('showSubcategories', $category)
             ->mountTableAction('editCategory', $child)
             ->assertTableActionDataSet(['parent_id' => $category->id]);
+    }
+
+    public function test_delete_action_warns_and_preserves_a_category_with_children(): void
+    {
+        [$user, $ledger] = $this->authorizedUserAndCurrentLedger();
+        $category = Category::factory()->create(['ledger_id' => $ledger->id, 'direction' => 'expense']);
+        Category::factory()->create(['ledger_id' => $ledger->id, 'parent_id' => $category->id, 'direction' => 'expense']);
+
+        Livewire::actingAs($user)
+            ->test(BookkeepingCategories::class)
+            ->callTableAction('deleteCategory', $category)
+            ->assertNotified(Notification::make()->title('有关联子分类，不能删除。')->warning());
+
+        $this->assertModelExists($category);
+    }
+
+    public function test_delete_action_warns_and_preserves_a_category_referenced_by_an_entry(): void
+    {
+        [$user, $ledger] = $this->authorizedUserAndCurrentLedger();
+        $category = Category::factory()->create(['ledger_id' => $ledger->id, 'direction' => 'expense']);
+        Entry::factory()->create(['ledger_id' => $ledger->id, 'category_id' => $category->id, 'created_by' => $user, 'updated_by' => $user]);
+
+        Livewire::actingAs($user)
+            ->test(BookkeepingCategories::class)
+            ->callTableAction('deleteCategory', $category)
+            ->assertNotified(Notification::make()->title('已被收支记录引用的分类不能删除。')->warning());
+
+        $this->assertModelExists($category);
+    }
+
+    public function test_delete_action_requires_confirmation_for_a_leaf_category(): void
+    {
+        [$user, $ledger] = $this->authorizedUserAndCurrentLedger();
+        $category = Category::factory()->create(['ledger_id' => $ledger->id, 'direction' => 'expense']);
+
+        Livewire::actingAs($user)
+            ->test(BookkeepingCategories::class)
+            ->mountTableAction('deleteCategory', $category)
+            ->assertActionMounted();
+
+        $this->assertModelExists($category);
+    }
+
+    public function test_delete_action_converts_service_validation_errors_to_warnings(): void
+    {
+        [$user, $ledger] = $this->authorizedUserAndCurrentLedger();
+        $category = Category::factory()->create(['ledger_id' => $ledger->id, 'direction' => 'expense']);
+        $this->mock(BookkeepingCategoryService::class, function ($mock): void {
+            $mock->shouldReceive('delete')
+                ->once()
+                ->andThrow(ValidationException::withMessages(['category' => '分类在删除前已被使用。']));
+        });
+
+        Livewire::actingAs($user)
+            ->test(BookkeepingCategories::class)
+            ->mountTableAction('deleteCategory', $category)
+            ->callMountedTableAction()
+            ->assertNotified(Notification::make()->title('分类在删除前已被使用。')->warning());
+
+        $this->assertModelExists($category);
     }
 
     /** @return array{User, Ledger} */

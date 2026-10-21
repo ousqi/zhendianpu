@@ -22,6 +22,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Validation\ValidationException;
 use UnitEnum;
 
 class BookkeepingCategories extends Page implements HasTable
@@ -95,7 +96,7 @@ class BookkeepingCategories extends Page implements HasTable
     {
         $selectedCategory = $this->selectedTopLevelCategory();
 
-        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->with('parent:id,name,direction')->when($selectedCategory, fn ($query) => $query->where('parent_id', $selectedCategory->id), fn ($query) => $query->whereNull('parent_id')))->defaultSort('sort_order')->columns([
+        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->with('parent:id,name,direction')->withCount(['children', 'entries'])->when($selectedCategory, fn ($query) => $query->where('parent_id', $selectedCategory->id), fn ($query) => $query->whereNull('parent_id')))->defaultSort('sort_order')->columns([
             TextColumn::make('direction')->label('方向')->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
             TextColumn::make('name')->label('名称')->formatStateUsing(fn (string $state, Category $record): string => $record->displayName())->searchable()->sortable(), TextColumn::make('parent.name')->label('父分类')->formatStateUsing(fn (string $state, Category $record): string => $record->parent?->displayName() ?? '一级分类')->placeholder('一级分类')->visible(fn (): bool => $selectedCategory !== null), TextColumn::make('sort_order')->label('排序')->sortable(), IconColumn::make('is_active')->label('启用')->boolean(),
         ])->headerActions([$this->categoryAction()])->recordActions([
@@ -105,8 +106,27 @@ class BookkeepingCategories extends Page implements HasTable
                 $service->toggle($this->context(), $this->ledger(), $record);
                 Notification::make()->title('分类状态已更新')->success()->send();
             }),
-            Action::make('deleteCategory')->label('删除')->color('danger')->requiresConfirmation()->visible(fn (): bool => $this->canWrite())->action(function (Category $record, BookkeepingCategoryService $service): void {
-                $service->delete($this->context(), $this->ledger(), $record);
+            Action::make('deleteCategory')->label('删除')->color('danger')->requiresConfirmation(fn (Category $record): bool => $record->children_count === 0 && $record->entries_count === 0)->visible(fn (): bool => $this->canWrite())->action(function (Category $record, BookkeepingCategoryService $service): void {
+                if ($record->children_count > 0) {
+                    Notification::make()->title('有关联子分类，不能删除。')->warning()->send();
+
+                    return;
+                }
+                if ($record->entries_count > 0) {
+                    Notification::make()->title('已被收支记录引用的分类不能删除。')->warning()->send();
+
+                    return;
+                }
+
+                try {
+                    $service->delete($this->context(), $this->ledger(), $record);
+                } catch (ValidationException $exception) {
+                    $messages = $exception->errors();
+                    Notification::make()->title($messages[array_key_first($messages)][0])->warning()->send();
+
+                    return;
+                }
+
                 Notification::make()->title('分类已删除')->success()->send();
             }),
         ]);
