@@ -111,7 +111,14 @@ class BookkeepingService
     /** @return array<string, mixed> */
     public function present(Entry $entry): array
     {
-        return ['id' => $entry->public_id, 'ledger_id' => $entry->ledger->public_id, 'revision' => $entry->revision, 'direction' => $entry->direction, 'amount' => $entry->amount, 'category_id' => $entry->category_id, 'category_name' => $entry->category->name, 'account_id' => $entry->account_id, 'account_name' => $entry->account->name, 'occurred_on' => $entry->occurred_on->toDateString(), 'description' => $entry->description, 'source' => $entry->source, 'voided_at' => $entry->voided_at?->toAtomString()];
+        $entryData = ['id' => $entry->public_id, 'ledger_id' => $entry->ledger->public_id, 'revision' => $entry->revision, 'direction' => $entry->direction, 'amount' => $entry->amount, 'category_id' => $entry->category_id, 'category_name' => $entry->category->name, 'account_id' => $entry->account_id, 'account_name' => $entry->account->name, 'occurred_on' => $entry->occurred_on->toDateString(), 'description' => $entry->description, 'source' => $entry->source, 'voided_at' => $entry->voided_at?->toAtomString()];
+        if (array_key_exists('refunded_amount', $entry->getAttributes())) {
+            $refundedAmount = bcadd((string) ($entry->refunded_amount ?? 0), '0', 2);
+
+            return [...$entryData, 'refunded_amount' => $refundedAmount, 'net_amount' => bcsub((string) $entry->amount, $refundedAmount, 2)];
+        }
+
+        return $entryData;
     }
 
     /** @param array<string, mixed> $input @param Closure(array<string, mixed>, Ledger): array<string, mixed> $operation @return array<string, mixed> */

@@ -991,6 +991,27 @@ class BookkeepingServiceTest extends TestCase
         ZhendianpuServer::tools()->assertRegistered([AddRefund::class, ListRefunds::class, UpdateRefund::class, VoidRefund::class]);
     }
 
+    public function test_entries_with_active_refunds_filter_excludes_entries_without_or_with_only_voided_refunds(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $account = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $entries = app(BookkeepingService::class);
+        $activeRefundEntry = $entries->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '100.00', 'category_id' => $category->id, 'account_id' => $account->id, 'occurred_on' => '2026-10-20'], 'admin');
+        $entries->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '50.00', 'category_id' => $category->id, 'account_id' => $account->id, 'occurred_on' => '2026-10-20'], 'admin');
+        $voidedRefundEntry = $entries->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '25.00', 'category_id' => $category->id, 'account_id' => $account->id, 'occurred_on' => '2026-10-20'], 'admin');
+        $refunds = app(BookkeepingRefundService::class);
+        $refunds->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $activeRefundEntry->public_id, 'account_id' => $account->id, 'amount' => '20.00', 'occurred_on' => '2026-10-20']);
+        $voidedRefund = $refunds->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $voidedRefundEntry->public_id, 'account_id' => $account->id, 'amount' => '5.00', 'occurred_on' => '2026-10-20']);
+        $refunds->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'refund_id' => $voidedRefund['refund']['id'], 'revision' => 1]);
+
+        $result = app(BookkeepingQueryService::class)->entries($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-20', 'end_date' => '2026-10-20', 'has_refunds' => true]);
+
+        $this->assertSame([$activeRefundEntry->public_id], array_column($result['records'], 'id'));
+        $this->assertSame('20.00', $result['records'][0]['refunded_amount']);
+        $this->assertSame('80.00', $result['records'][0]['net_amount']);
+    }
+
     private function createLegacyCashTable(): void
     {
         Schema::create('zdp_cash_transactions', function (Blueprint $table): void {

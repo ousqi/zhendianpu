@@ -33,7 +33,7 @@ class ListEntries extends BookkeepingTool
     protected function filters(JsonSchema $schema, bool $pagination): array
     {
         return ['ledger_id' => $schema->string()->pattern('^[0-7][0-9A-HJKMNP-TV-Z]{25}$')->required(), 'start_date' => $schema->string()->format('date')->nullable(), 'end_date' => $schema->string()->format('date')->nullable(), 'direction' => $schema->string()->enum(['income', 'expense'])->nullable(),
-            'category_id' => $schema->integer()->nullable(), 'account_id' => $schema->integer()->nullable(), 'keyword' => $schema->string()->max(1000)->nullable(), 'include_voided' => $schema->boolean()->nullable(),
+            'category_id' => $schema->integer()->nullable(), 'account_id' => $schema->integer()->nullable(), 'keyword' => $schema->string()->max(1000)->nullable(), 'include_voided' => $schema->boolean()->nullable(), 'has_refunds' => $schema->boolean()->nullable(),
             ...($pagination ? ['page' => $schema->integer()->min(1)->nullable(), 'limit' => $schema->integer()->min(1)->max(100)->nullable()] : [])];
     }
 }

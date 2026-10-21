@@ -285,7 +285,7 @@ MCP 客户端应先调用 `list_ledgers` 或不带参数的 `get_bookkeeping_con
 | `add_entries` | 写入、幂等 | 原子新增 1–50 条已发生收支。 |
 | `add_transfer` | 写入、幂等 | 新增一笔已发生的账户间转账。 |
 | `add_refund` / `list_refunds` / `update_refund` / `void_refund` | 写入/读取 | 新增、查询、修改或撤销指定账本的退款记录；退款需关联有效原收支，方向自动推断。 |
-| `list_entries` | 读取 | 按日期、方向、分类、账户、关键字和作废状态查询账目。 |
+| `list_entries` | 读取 | 按日期、方向、分类、账户、关键字、作废状态或是否有有效退款查询账目；每条记录会返回有效退款累计 `refunded_amount` 和净额 `net_amount`。 |
 | `get_bookkeeping_summary` | 读取 | 返回收入、支出、期间结余和分类汇总。 |
 | `update_entry` | 写入、幂等 | 基于账目 ID 和修订版本修改账目。 |
 | `update_transfer` | 写入、幂等 | 基于转账 ID 和修订版本修改转账。 |

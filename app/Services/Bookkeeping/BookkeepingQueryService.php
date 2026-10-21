@@ -45,7 +45,7 @@ class BookkeepingQueryService
         $this->readable($context);
         $input = $this->filters($arguments, true);
         $ledger = $this->ledgers->get($input['ledger_id']);
-        $query = $this->query($ledger, $input)->with(['category', 'account'])->orderByDesc('occurred_on')->orderByDesc('id');
+        $query = $this->query($ledger, $input)->with(['ledger', 'category', 'account'])->withSum(['refunds as refunded_amount' => fn (Builder $query): Builder => $query->where('ledger_id', $ledger->id)->whereNull('voided_at')], 'amount')->orderByDesc('occurred_on')->orderByDesc('id');
         $rows = $query->paginate($input['limit'] ?? 20)->through(fn (Entry $entry): array => $this->service->present($entry));
 
         return ['ok' => true, 'request_id' => $context->requestId, 'period' => ['start' => $input['start_date'], 'end' => $input['end_date']],
@@ -104,7 +104,7 @@ class BookkeepingQueryService
     private function filters(array $arguments, bool $allowsPagination): array
     {
         $rules = ['ledger_id' => ['required', 'ulid'], 'start_date' => ['nullable', 'date_format:Y-m-d'], 'end_date' => ['nullable', 'date_format:Y-m-d'], 'direction' => ['nullable', 'in:income,expense'],
-            'category_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'keyword' => ['nullable', 'string', 'max:1000'], 'include_voided' => ['nullable', 'boolean']];
+            'category_id' => ['nullable', 'integer'], 'account_id' => ['nullable', 'integer'], 'keyword' => ['nullable', 'string', 'max:1000'], 'include_voided' => ['nullable', 'boolean'], 'has_refunds' => ['nullable', 'boolean']];
         if ($allowsPagination) {
             $rules['page'] = ['nullable', 'integer', 'min:1'];
             $rules['limit'] = ['nullable', 'integer', 'min:1', 'max:100'];
@@ -134,7 +134,8 @@ class BookkeepingQueryService
             ->when(isset($input['direction']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.direction', $input['direction']))
             ->when(isset($input['category_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.category_id', $input['category_id']))
             ->when(isset($input['account_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.account_id', $input['account_id']))
-            ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.description', 'like', '%'.$input['keyword'].'%'));
+            ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.description', 'like', '%'.$input['keyword'].'%'))
+            ->when(! empty($input['has_refunds']), fn (Builder $query): Builder => $query->whereHas('refunds', fn (Builder $refunds): Builder => $refunds->where('ledger_id', $ledger->id)->whereNull('voided_at')));
     }
 
     private function totals(Builder $query, ?Ledger $ledger = null, ?array $input = null): array
