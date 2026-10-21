@@ -18,6 +18,8 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Support\Enums\IconPosition;
+use Filament\Support\Icons\Heroicon;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
@@ -82,17 +84,42 @@ class BookkeepingRefunds extends Page implements HasTable
             ->columns([
                 TextColumn::make('entry.occurred_on')->label('原记录日期')->date('Y-m-d')->sortable(),
                 TextColumn::make('entry.direction')->label('原方向')->badge()->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
-                TextColumn::make('entry.category.name')->label('原分类')->formatStateUsing(fn (string $state, Refund $record): string => $record->entry->category->displayName()),
+                TextColumn::make('entry.category.name')->label('原分类')->formatStateUsing(fn (string $state, Refund $record): string => $record->entry->category->displayName())
+                    ->icon(fn (Refund $record): ?Heroicon => filled($record->entry->description) ? Heroicon::OutlinedDocumentText : null)
+                    ->iconPosition(IconPosition::After)
+                    ->iconColor('info')
+                    ->tooltip(fn (Refund $record): ?string => $record->entry->description)
+                    ->action(
+                        Action::make('viewOriginalDescription')
+                            ->visible(fn (Refund $record): bool => filled($record->entry->description))
+                            ->modalHeading('原收支说明')
+                            ->fillForm(fn (Refund $record): array => ['description' => $record->entry->description])
+                            ->schema([Textarea::make('description')->label('说明')->rows(8)->disabled()])
+                            ->modalSubmitAction(false)
+                            ->modalCancelActionLabel('关闭'),
+                    ),
                 TextColumn::make('entry.amount')->label('原金额')->money($this->ledger()->currency),
-                TextColumn::make('entry.description')->label('原说明')->placeholder('—')->wrap()->visibleFrom('lg'),
                 TextColumn::make('occurred_on')->label('退款日期')->date('Y-m-d')->sortable(),
                 TextColumn::make('amount')->label('退款金额')->money($this->ledger()->currency)->sortable(),
-                TextColumn::make('account.name')->label('退款账户'),
-                TextColumn::make('description')->label('退款说明')->placeholder('—')->wrap()->searchable(query: function (Builder $query, string $search): void {
-                    $query->where('bookkeeping_refunds.description', 'like', "%{$search}%")
-                        ->orWhereHas('entry', fn (Builder $query): Builder => $query->where('description', 'like', "%{$search}%")
-                            ->orWhereHas('category', fn (Builder $query): Builder => $query->where('name', 'like', "%{$search}%")));
-                }),
+                TextColumn::make('account.name')->label('退款账户')
+                    ->icon(fn (Refund $record): ?Heroicon => filled($record->description) ? Heroicon::OutlinedDocumentText : null)
+                    ->iconPosition(IconPosition::After)
+                    ->iconColor('info')
+                    ->tooltip(fn (Refund $record): ?string => $record->description)
+                    ->action(
+                        Action::make('viewRefundDescription')
+                            ->visible(fn (Refund $record): bool => filled($record->description))
+                            ->modalHeading('退款说明')
+                            ->fillForm(fn (Refund $record): array => ['description' => $record->description])
+                            ->schema([Textarea::make('description')->label('说明')->rows(8)->disabled()])
+                            ->modalSubmitAction(false)
+                            ->modalCancelActionLabel('关闭'),
+                    )
+                    ->searchable(query: function (Builder $query, string $search): void {
+                        $query->where('bookkeeping_refunds.description', 'like', "%{$search}%")
+                            ->orWhereHas('entry', fn (Builder $query): Builder => $query->where('description', 'like', "%{$search}%")
+                                ->orWhereHas('category', fn (Builder $query): Builder => $query->where('name', 'like', "%{$search}%")));
+                    }),
                 TextColumn::make('status')->label('状态')->badge()->state(fn (Refund $record): string => $record->voided_at === null ? '有效' : '已撤销')->color(fn (string $state): string => $state === '有效' ? 'success' : 'gray'),
                 TextColumn::make('valid_refunds_total')->label('有效退款合计')->money($this->ledger()->currency),
                 TextColumn::make('net_amount')->label('净额')->state(fn (Refund $record): string => bcsub($record->entry->amount, (string) $record->valid_refunds_total, 2))->money($this->ledger()->currency),
