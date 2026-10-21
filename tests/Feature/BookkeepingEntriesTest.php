@@ -51,8 +51,8 @@ class BookkeepingEntriesTest extends TestCase
             ->test(BookkeepingEntries::class)
             ->assertTableFilterExists('category_id', function (SelectFilter $filter) use ($topLevelCategory, $childCategory): bool {
                 return $filter->getOptions() === [
-                    '一级分类' => [$topLevelCategory->id => '食材采购'],
-                    '二级分类' => [$childCategory->id => '食材采购 / 面粉'],
+                    '一级分类' => [$topLevelCategory->id => '🍜 食材采购'],
+                    '二级分类' => [$childCategory->id => '🍜 食材采购 / 🍜 面粉'],
                 ];
             })
             ->assertCanSeeTableRecords([$topLevelEntry, $childEntry])
@@ -74,6 +74,14 @@ class BookkeepingEntriesTest extends TestCase
             ->test(BookkeepingEntries::class)
             ->assertTableActionVisible('editRefund', $entry)
             ->assertTableActionVisible('voidRefund', $entry);
+    }
+
+    public function test_category_display_name_adds_an_inferred_icon_without_changing_the_stored_name(): void
+    {
+        $category = Category::factory()->make(['name' => '食材采购', 'direction' => 'expense']);
+
+        $this->assertSame('🍜 食材采购', $category->displayName());
+        $this->assertSame('食材采购', $category->name);
     }
 
     /** @return array{User, Ledger} */

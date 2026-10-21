@@ -73,7 +73,7 @@ class BookkeepingEntries extends Page implements HasTable
     {
         return $table->query($this->entries())->defaultSort('occurred_on', 'desc')->columns([
             TextColumn::make('occurred_on')->label('日期')->date('Y-m-d')->sortable(), TextColumn::make('direction')->label('方向')->badge()->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
-            TextColumn::make('category.name')->label('分类')
+            TextColumn::make('category.name')->label('分类')->formatStateUsing(fn (string $state, Entry $record): string => $record->category->displayName())
                 ->icon(fn (Entry $record): ?Heroicon => filled($record->description) ? Heroicon::OutlinedDocumentText : null)
                 ->iconPosition(IconPosition::After)
                 ->iconColor('info')
@@ -102,8 +102,8 @@ class BookkeepingEntries extends Page implements HasTable
                 $ledgerId = $this->ledger()->id;
 
                 return [
-                    '一级分类' => Category::query()->where('ledger_id', $ledgerId)->whereNull('parent_id')->orderBy('name')->pluck('name', 'id')->all(),
-                    '二级分类' => Category::query()->where('ledger_id', $ledgerId)->whereNotNull('parent_id')->with('parent')->orderBy('name')->get()->mapWithKeys(fn (Category $category): array => [$category->id => $category->parent->name.' / '.$category->name])->all(),
+                    '一级分类' => Category::query()->where('ledger_id', $ledgerId)->whereNull('parent_id')->orderBy('name')->get(['id', 'name', 'direction'])->mapWithKeys(fn (Category $category): array => [$category->id => $category->displayName()])->all(),
+                    '二级分类' => Category::query()->where('ledger_id', $ledgerId)->whereNotNull('parent_id')->with('parent:id,name,direction')->orderBy('name')->get()->mapWithKeys(fn (Category $category): array => [$category->id => $category->parent->displayName().' / '.$category->displayName()])->all(),
                 ];
             })->searchable()->preload(),
             SelectFilter::make('account_id')->label('账户')->relationship('account', 'name'),
@@ -159,7 +159,7 @@ class BookkeepingEntries extends Page implements HasTable
         return Action::make($name)->label($label)->visible(fn (): bool => $this->canWrite())->schema([
             Select::make('direction')->label('方向')->options(['income' => '收入', 'expense' => '支出'])->required()->live(),
             TextInput::make('amount')->label('金额')->numeric()->minValue(0.01)->required(),
-            Select::make('category_id')->label('分类')->options(fn (Get $get): array => Category::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->doesntHave('children')->where('direction', $get('direction'))->orderBy('name')->pluck('name', 'id')->all())
+            Select::make('category_id')->label('分类')->options(fn (Get $get): array => Category::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->doesntHave('children')->where('direction', $get('direction'))->orderBy('name')->get(['id', 'name', 'direction'])->mapWithKeys(fn (Category $category): array => [$category->id => $category->displayName()])->all())
                 ->searchable()->preload()->searchPrompt('输入分类名称快速选择')->required(),
             Select::make('account_id')->label('账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->default(fn (): ?int => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_default', true)->value('id')),
             DatePicker::make('occurred_on')->label('日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(fn (): string => now($this->ledger()->timezone)->toDateString())->required(), Textarea::make('description')->label('说明')->maxLength(1000),

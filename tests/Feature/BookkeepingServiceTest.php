@@ -520,7 +520,7 @@ class BookkeepingServiceTest extends TestCase
         $this->assertDatabaseCount('bookkeeping_entries', 2);
     }
 
-    public function test_current_ledger_is_scoped_to_the_user_session_and_falls_back_when_archived(): void
+    public function test_current_ledger_selection_persists_after_session_is_cleared_and_archived_selection_falls_back(): void
     {
         $context = $this->context();
         $otherLedger = Ledger::factory()->create(['name' => '个人账本']);
@@ -529,11 +529,20 @@ class BookkeepingServiceTest extends TestCase
         $service->selectCurrent($context->user, $otherLedger);
 
         $this->assertSame($otherLedger->id, $service->current($context->user)->id);
-        $this->assertSame($this->ledger->id, $service->current(User::factory()->create())->id);
+        $this->assertDatabaseHas('users', ['id' => $context->user->id, 'bookkeeping_default_ledger_id' => $otherLedger->id]);
+
+        session()->forget('bookkeeping.current_ledger_id.'.$context->user->id);
+        $user = User::query()->findOrFail($context->user->id);
+
+        $this->assertSame($otherLedger->id, $service->current($user)->id);
 
         $otherLedger->update(['status' => 'archived']);
+        $this->assertSame('archived', $otherLedger->fresh()->status);
+        session()->forget('bookkeeping.current_ledger_id.'.$user->id);
+        $fallback = $service->fallback();
 
-        $this->assertSame($this->ledger->id, $service->current($context->user)->id);
+        $this->assertSame($fallback->id, $service->current($user)->id);
+        $this->assertDatabaseHas('users', ['id' => $user->id, 'bookkeeping_default_ledger_id' => $fallback->id]);
     }
 
     public function test_entries_reject_parent_categories_without_writes(): void

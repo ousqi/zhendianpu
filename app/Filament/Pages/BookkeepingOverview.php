@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Data\Mcp\AccessContext;
+use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
 use App\Models\User;
@@ -151,7 +152,7 @@ class BookkeepingOverview extends Page implements HasTable
         return [
             'trend' => $overview['trend'],
             'expense' => $expenseCategories->isEmpty() ? $this->emptyCategoryChartData('expense') : [
-                'labels' => $expenseCategories->pluck('name')->all(),
+                'labels' => $expenseCategories->map(fn (array $category): string => Category::displayNameFor($category['name'], $category['direction']))->all(),
                 'percentages' => $expenseCategories->pluck('percentage')->map(fn (?string $percentage): string => $percentage ?? '0.00')->all(),
                 'datasets' => [[
                     'label' => '支出',
@@ -160,7 +161,7 @@ class BookkeepingOverview extends Page implements HasTable
                 ]],
             ],
             'income' => $incomeCategories->isEmpty() ? $this->emptyCategoryChartData('income') : [
-                'labels' => $incomeCategories->pluck('name')->all(),
+                'labels' => $incomeCategories->map(fn (array $category): string => Category::displayNameFor($category['name'], $category['direction']))->all(),
                 'datasets' => [[
                     'label' => '收入',
                     'data' => $incomeCategories->pluck('amount')->all(),
@@ -185,7 +186,7 @@ class BookkeepingOverview extends Page implements HasTable
             ->columns([
                 TextColumn::make('occurred_on')->label('日期')->date('Y-m-d'),
                 TextColumn::make('direction')->label('方向')->badge()->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
-                TextColumn::make('category.name')->label('分类'),
+                TextColumn::make('category.name')->label('分类')->formatStateUsing(fn (string $state, Entry $record): string => $record->category->displayName()),
                 TextColumn::make('account.name')->label('账户')->visibleFrom('md'),
                 TextColumn::make('amount')->label('金额')->money($this->ledger()->currency)->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
                 TextColumn::make('description')->label('说明')->wrap()->visibleFrom('md'),
@@ -244,7 +245,7 @@ class BookkeepingOverview extends Page implements HasTable
     private function recentEntries(): Builder
     {
         return Entry::query()->where('ledger_id', $this->ledger()->id)
-            ->with(['category:id,name', 'account:id,name'])
+            ->with(['category:id,name,direction', 'account:id,name'])
             ->whereBetween('occurred_on', [$this->startDate, $this->endDate])
             ->whereNull('voided_at')
             ->orderByDesc('occurred_on')

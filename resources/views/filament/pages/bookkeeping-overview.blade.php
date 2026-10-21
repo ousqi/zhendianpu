@@ -138,7 +138,7 @@
                         @forelse ($expenseCategories as $category)
                             <tr class="transition hover:bg-rose-50/60 dark:hover:bg-rose-500/5">
                                 <td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">
-                                    @if ($category['id']) <a href="{{ \App\Filament\Pages\BookkeepingEntries::getUrl(['tableFilters' => [...$filters, 'direction' => ['value' => 'expense'], 'category_id' => ['value' => $category['id']]]]) }}" class="hover:text-rose-700 hover:underline dark:hover:text-rose-300">{{ $category['name'] }}</a> @else {{ $category['name'] }} @endif
+                                    @if ($category['id']) <a href="{{ \App\Filament\Pages\BookkeepingEntries::getUrl(['tableFilters' => [...$filters, 'direction' => ['value' => 'expense'], 'category_id' => ['value' => $category['id']]]]) }}" class="hover:text-rose-700 hover:underline dark:hover:text-rose-300">{{ \App\Models\Bookkeeping\Category::displayNameFor($category['name'], $category['direction']) }}</a> @else {{ \App\Models\Bookkeeping\Category::displayNameFor($category['name'], $category['direction']) }} @endif
                                 </td>
                                 <td class="px-4 py-3 text-right font-semibold tabular-nums text-gray-950 dark:text-white">¥ {{ $category['amount'] }}</td>
                                 <td class="px-4 py-3 text-right tabular-nums text-gray-600 dark:text-gray-300">{{ $category['percentage'] }}%</td>
@@ -161,7 +161,7 @@
                         @forelse ($incomeCategories as $category)
                             <tr class="transition hover:bg-emerald-50/60 dark:hover:bg-emerald-500/5">
                                 <td class="px-4 py-3 font-medium text-gray-800 dark:text-gray-100">
-                                    @if ($category['id']) <a href="{{ \App\Filament\Pages\BookkeepingEntries::getUrl(['tableFilters' => [...$filters, 'direction' => ['value' => 'income'], 'category_id' => ['value' => $category['id']]]]) }}" class="hover:text-emerald-700 hover:underline dark:hover:text-emerald-300">{{ $category['name'] }}</a> @else {{ $category['name'] }} @endif
+                                    @if ($category['id']) <a href="{{ \App\Filament\Pages\BookkeepingEntries::getUrl(['tableFilters' => [...$filters, 'direction' => ['value' => 'income'], 'category_id' => ['value' => $category['id']]]]) }}" class="hover:text-emerald-700 hover:underline dark:hover:text-emerald-300">{{ \App\Models\Bookkeeping\Category::displayNameFor($category['name'], $category['direction']) }}</a> @else {{ \App\Models\Bookkeeping\Category::displayNameFor($category['name'], $category['direction']) }} @endif
                                 </td>
                                 <td class="px-4 py-3 text-right font-semibold tabular-nums text-gray-950 dark:text-white">¥ {{ $category['amount'] }}</td>
                             </tr>

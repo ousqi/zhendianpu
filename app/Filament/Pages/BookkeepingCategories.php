@@ -93,9 +93,9 @@ class BookkeepingCategories extends Page implements HasTable
     {
         $selectedCategory = $this->selectedTopLevelCategory();
 
-        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->when($selectedCategory, fn ($query) => $query->where('parent_id', $selectedCategory->id), fn ($query) => $query->whereNull('parent_id')))->defaultSort('sort_order')->columns([
+        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->with('parent:id,name,direction')->when($selectedCategory, fn ($query) => $query->where('parent_id', $selectedCategory->id), fn ($query) => $query->whereNull('parent_id')))->defaultSort('sort_order')->columns([
             TextColumn::make('direction')->label('方向')->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
-            TextColumn::make('name')->label('名称')->searchable()->sortable(), TextColumn::make('parent.name')->label('父分类')->placeholder('一级分类')->visible(fn (): bool => $selectedCategory !== null), TextColumn::make('sort_order')->label('排序')->sortable(), IconColumn::make('is_active')->label('启用')->boolean(),
+            TextColumn::make('name')->label('名称')->formatStateUsing(fn (string $state, Category $record): string => $record->displayName())->searchable()->sortable(), TextColumn::make('parent.name')->label('父分类')->formatStateUsing(fn (string $state, Category $record): string => $record->parent?->displayName() ?? '一级分类')->placeholder('一级分类')->visible(fn (): bool => $selectedCategory !== null), TextColumn::make('sort_order')->label('排序')->sortable(), IconColumn::make('is_active')->label('启用')->boolean(),
         ])->headerActions([$this->categoryAction()])->recordActions([
             $this->categoryAction('editCategory', '编辑'),
             Action::make('viewSubcategories')->label('查看子分类')->visible(fn (Category $record): bool => $record->parent_id === null)->action(fn (Category $record) => $this->showSubcategories($record)),
@@ -115,7 +115,7 @@ class BookkeepingCategories extends Page implements HasTable
         return Action::make($name)->label($label)->visible(fn (): bool => $this->canWrite())->schema([
             TextInput::make('name')->label('名称')->required()->maxLength(255),
             Select::make('direction')->label('方向')->options(['income' => '收入', 'expense' => '支出'])->required()->disabled(fn (?Category $record): bool => $record?->entries()->exists() ?? false),
-            Select::make('parent_id')->label('父分类')->options(fn (): array => Category::query()->where('ledger_id', $this->ledger()->id)->whereNull('parent_id')->orderBy('sort_order')->pluck('name', 'id')->all())->searchable(), TextInput::make('sort_order')->label('排序')->numeric()->default(0)->required(),
+            Select::make('parent_id')->label('父分类')->options(fn (): array => Category::query()->where('ledger_id', $this->ledger()->id)->whereNull('parent_id')->orderBy('sort_order')->get(['id', 'name', 'direction'])->mapWithKeys(fn (Category $category): array => [$category->id => $category->displayName()])->all())->searchable(), TextInput::make('sort_order')->label('排序')->numeric()->default(0)->required(),
         ])->fillForm(fn (?Category $record): array => $record?->only(['name', 'direction', 'parent_id', 'sort_order']) ?? ['sort_order' => 0])
             ->action(function (array $data, ?Category $record, BookkeepingCategoryService $service): void {
                 if ($record) {

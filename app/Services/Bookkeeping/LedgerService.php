@@ -90,8 +90,18 @@ class LedgerService
             return $ledger;
         }
 
+        $ledger = $user->bookkeepingDefaultLedger()
+            ->where('status', 'active')
+            ->first();
+
+        if ($ledger instanceof Ledger) {
+            session([$sessionKey => $ledger->public_id]);
+
+            return $ledger;
+        }
+
         $ledger = $this->fallback();
-        session([$sessionKey => $ledger->public_id]);
+        $this->selectCurrent($user, $ledger);
 
         return $ledger;
     }
@@ -100,6 +110,8 @@ class LedgerService
     {
         $this->assertActive($ledger);
 
+        $user->bookkeeping_default_ledger_id = $ledger->id;
+        $user->save();
         session([$this->currentLedgerSessionKey($user) => $ledger->public_id]);
     }
 
