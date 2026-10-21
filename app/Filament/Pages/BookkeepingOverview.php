@@ -129,7 +129,7 @@ class BookkeepingOverview extends Page implements HasTable
 
         $visibleCategories[] = [
             'id' => null,
-            'name' => '其他',
+            'name' => '其余分类',
             'direction' => $direction,
             'amount' => $otherAmount,
             'percentage' => $direction === 'expense' && bccomp($directionTotal, '0.00', 2) === 1
