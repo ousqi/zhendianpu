@@ -5,9 +5,13 @@ namespace Tests\Feature;
 use App\Data\Mcp\AccessContext;
 use App\Mcp\Servers\ZhendianpuServer;
 use App\Mcp\Tools\Zhendianpu\AddCategory;
+use App\Mcp\Tools\Zhendianpu\AddRefund;
 use App\Mcp\Tools\Zhendianpu\ListCategories;
+use App\Mcp\Tools\Zhendianpu\ListRefunds;
 use App\Mcp\Tools\Zhendianpu\ToggleCategory;
 use App\Mcp\Tools\Zhendianpu\UpdateCategory;
+use App\Mcp\Tools\Zhendianpu\UpdateRefund;
+use App\Mcp\Tools\Zhendianpu\VoidRefund;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
@@ -19,6 +23,7 @@ use App\Models\Workspace;
 use App\Services\Bookkeeping\BookkeepingAccountService;
 use App\Services\Bookkeeping\BookkeepingCategoryService;
 use App\Services\Bookkeeping\BookkeepingQueryService;
+use App\Services\Bookkeeping\BookkeepingRefundService;
 use App\Services\Bookkeeping\BookkeepingService;
 use App\Services\Bookkeeping\BookkeepingTransferService;
 use App\Services\Bookkeeping\LedgerService;
@@ -52,6 +57,7 @@ class BookkeepingServiceTest extends TestCase
         'bookkeeping_categories',
         'bookkeeping_accounts',
         'bookkeeping_entries',
+        'bookkeeping_refunds',
         'bookkeeping_transfers',
         'bookkeeping_legacy_imports',
         'bookkeeping_legacy_cash_reconciliations',
@@ -877,6 +883,103 @@ class BookkeepingServiceTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Imported legacy cash rows must preserve direction, amount, and date.');
         $migration->up();
+    }
+
+    public function test_refunds_adjust_account_balances_net_summaries_and_protect_original_entries(): void
+    {
+        $context = $this->context();
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $expense = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $source = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $refundAccount = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $entries = app(BookkeepingService::class);
+        $incomeEntry = $entries->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '100.00', 'category_id' => $income->id, 'account_id' => $source->id, 'occurred_on' => '2026-10-01'], 'admin');
+        $expenseEntry = $entries->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '80.00', 'category_id' => $expense->id, 'account_id' => $source->id, 'occurred_on' => '2026-10-01'], 'admin');
+        $refunds = app(BookkeepingRefundService::class);
+        $refunds->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $incomeEntry->public_id, 'account_id' => $refundAccount->id, 'amount' => '20.00', 'occurred_on' => '2026-10-02']);
+        $expenseRefund = $refunds->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $expenseEntry->public_id, 'account_id' => $refundAccount->id, 'amount' => '30.00', 'occurred_on' => '2026-10-02']);
+        $summary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-01', 'end_date' => '2026-10-02']);
+        $balances = app(BookkeepingAccountService::class)->accountsWithBalances($this->ledger)->pluck('balance', 'id');
+        $this->assertSame('80.00', $summary['totals']['income']);
+        $this->assertSame('50.00', $summary['totals']['expense']);
+        $this->assertSame('20.00', $summary['totals']['income_refunds']);
+        $this->assertSame('30.00', $summary['totals']['expense_refunds']);
+        $this->assertSame('10.00', (string) $balances[$refundAccount->id]);
+        $this->expectException(ValidationException::class);
+        $refunds->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $expenseEntry->public_id, 'account_id' => $refundAccount->id, 'amount' => '60.00']);
+    }
+
+    public function test_entries_with_active_refunds_cannot_change_direction_or_category_and_keep_the_refund_amount_floor(): void
+    {
+        $context = $this->context();
+        $income = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $replacementIncome = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $expense = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $account = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '100.00', 'category_id' => $income->id, 'account_id' => $account->id], 'admin');
+        app(BookkeepingRefundService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'account_id' => $account->id, 'amount' => '20.00']);
+
+        foreach ([
+            ['direction' => 'expense', 'category_id' => $expense->id],
+            ['category_id' => $replacementIncome->id],
+            ['amount' => '19.99'],
+        ] as $changes) {
+            try {
+                app(BookkeepingService::class)->update($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'revision' => 1, ...$changes]);
+                $this->fail('Expected active refunds to protect the original entry.');
+            } catch (ValidationException) {
+                $entry->refresh();
+                $this->assertSame('income', $entry->direction);
+                $this->assertSame($income->id, $entry->category_id);
+                $this->assertSame('100.00', $entry->amount);
+                $this->assertSame(1, $entry->revision);
+            }
+        }
+    }
+
+    public function test_refund_reports_filter_by_the_refund_account_not_the_original_entry_account(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $originalAccount = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $refundAccount = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '100.00', 'category_id' => $category->id, 'account_id' => $originalAccount->id, 'occurred_on' => '2026-10-01'], 'admin');
+        app(BookkeepingRefundService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'account_id' => $refundAccount->id, 'amount' => '20.00', 'occurred_on' => '2026-10-02']);
+
+        $originalAccountSummary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-01', 'end_date' => '2026-10-02', 'account_id' => $originalAccount->id]);
+        $refundAccountSummary = app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id, 'start_date' => '2026-10-01', 'end_date' => '2026-10-02', 'account_id' => $refundAccount->id]);
+
+        $this->assertSame(['income' => '0.00', 'expense' => '100.00', 'balance' => '-100.00'], $originalAccountSummary['totals']);
+        $this->assertSame('20.00', $refundAccountSummary['totals']['expense_refunds']);
+        $this->assertSame('-20.00', $refundAccountSummary['totals']['expense']);
+    }
+
+    public function test_dashboard_includes_inactive_accounts_referenced_only_by_refunds(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'income']);
+        $entryAccount = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $refundAccount = Account::factory()->create(['ledger_id' => $this->ledger->id]);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'income', 'amount' => '100.00', 'category_id' => $category->id, 'account_id' => $entryAccount->id], 'admin');
+        app(BookkeepingRefundService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'account_id' => $refundAccount->id, 'amount' => '20.00']);
+        $refundAccount->update(['is_active' => false]);
+
+        $dashboard = app(BookkeepingQueryService::class)->dashboard($context, ['ledger_id' => $this->ledger->public_id]);
+
+        $this->assertSame('-20.00', collect($dashboard['accounts'])->firstWhere('id', $refundAccount->id)['balance']);
+        $this->assertSame('80.00', $dashboard['account_total']);
+    }
+
+    public function test_refunds_are_ledger_scoped_voidable_and_registered(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        $entry = app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
+        $account = app(BookkeepingAccountService::class)->defaultAccount($this->ledger);
+        $created = app(BookkeepingRefundService::class)->add($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $entry->public_id, 'account_id' => $account->id, 'amount' => '5.00']);
+        app(BookkeepingRefundService::class)->void($context, ['ledger_id' => $this->ledger->public_id, 'event_id' => (string) Str::ulid(), 'refund_id' => $created['refund']['id'], 'revision' => 1]);
+        $this->assertSame('10.00', app(BookkeepingQueryService::class)->summary($context, ['ledger_id' => $this->ledger->public_id])['totals']['expense']);
+        ZhendianpuServer::tools()->assertRegistered([AddRefund::class, ListRefunds::class, UpdateRefund::class, VoidRefund::class]);
     }
 
     private function createLegacyCashTable(): void

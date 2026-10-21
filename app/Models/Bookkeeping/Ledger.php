@@ -44,6 +44,11 @@ class Ledger extends Model
         return $this->hasMany(Entry::class);
     }
 
+    public function refunds(): HasMany
+    {
+        return $this->hasMany(Refund::class);
+    }
+
     public function transfers(): HasMany
     {
         return $this->hasMany(Transfer::class);

@@ -7,6 +7,7 @@ use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
+use App\Models\Bookkeeping\Refund;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
@@ -48,7 +49,7 @@ class BookkeepingQueryService
         $rows = $query->paginate($input['limit'] ?? 20)->through(fn (Entry $entry): array => $this->service->present($entry));
 
         return ['ok' => true, 'request_id' => $context->requestId, 'period' => ['start' => $input['start_date'], 'end' => $input['end_date']],
-            'records' => $rows->items(), 'current_page' => $rows->currentPage(), 'last_page' => $rows->lastPage(), 'summary' => $this->totals($this->summaryQuery($ledger, $input))];
+            'records' => $rows->items(), 'current_page' => $rows->currentPage(), 'last_page' => $rows->lastPage(), 'summary' => $this->totals($this->summaryQuery($ledger, $input), $ledger, $input)];
     }
 
     /** @param array<string, mixed> $arguments @return array<string, mixed> */
@@ -75,6 +76,7 @@ class BookkeepingQueryService
             ->where(function (Builder $query): void {
                 $query->where('bookkeeping_accounts.is_active', true)
                     ->orWhereNotNull('entry_balances.account_id')
+                    ->orWhereNotNull('refund_balances.account_id')
                     ->orWhereNotNull('outgoing_balances.source_account_id')
                     ->orWhereNotNull('incoming_balances.destination_account_id');
             })->orderBy('sort_order')->orderBy('name')->get(['bookkeeping_accounts.id', 'bookkeeping_accounts.name', 'balance'])
@@ -83,14 +85,14 @@ class BookkeepingQueryService
         $recent = (clone $query)->with(['ledger', 'category', 'account'])->orderByDesc('occurred_on')->orderByDesc('id')->limit(10)->get()
             ->map(fn (Entry $entry): array => $this->service->present($entry))->all();
 
-        return [...$summary, 'trend' => $this->trend($query, $input['start_date'], $input['end_date'], $ledger->timezone), 'accounts' => $accounts, 'recent' => $recent,
+        return [...$summary, 'trend' => $this->trend($query, $input['start_date'], $input['end_date'], $ledger->timezone, $ledger, $input), 'accounts' => $accounts, 'recent' => $recent,
             'account_total' => array_reduce($accounts, fn (string $total, array $account): string => bcadd($total, $account['balance'], 2), '0.00')];
     }
 
     /** @param array<string, mixed> $input */
     public function summaryFor(Ledger $ledger, array $input): array
     {
-        return $this->totals($this->summaryQuery($ledger, $this->filters([...$input, 'ledger_id' => $ledger->public_id], false)));
+        return $this->totals($this->summaryQuery($ledger, $this->filters([...$input, 'ledger_id' => $ledger->public_id], false)), $ledger, $this->filters([...$input, 'ledger_id' => $ledger->public_id], false));
     }
 
     public function totalsFor(Builder $query): array
@@ -135,35 +137,46 @@ class BookkeepingQueryService
             ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.description', 'like', '%'.$input['keyword'].'%'));
     }
 
-    private function totals(Builder $query): array
+    private function totals(Builder $query, ?Ledger $ledger = null, ?array $input = null): array
     {
-        $amounts = (clone $query)->whereNull('bookkeeping_entries.voided_at')->selectRaw("COALESCE(SUM(CASE WHEN direction = 'income' THEN amount ELSE 0 END), 0) as income")
-            ->selectRaw("COALESCE(SUM(CASE WHEN direction = 'expense' THEN amount ELSE 0 END), 0) as expense")->first();
-        $income = bcadd((string) $amounts->income, '0', 2);
-        $expense = bcadd((string) $amounts->expense, '0', 2);
+        $amounts = (clone $query)->whereNull('bookkeeping_entries.voided_at')->select([])->selectRaw("COALESCE(SUM(CASE WHEN direction = 'income' THEN amount ELSE 0 END), 0) as income")->selectRaw("COALESCE(SUM(CASE WHEN direction = 'expense' THEN amount ELSE 0 END), 0) as expense")->first();
+        $grossIncome = bcadd((string) $amounts->income, '0', 2);
+        $grossExpense = bcadd((string) $amounts->expense, '0', 2);
+        $incomeRefunds = '0.00';
+        $expenseRefunds = '0.00';
+        if ($ledger !== null && $input !== null) {
+            $refunds = $this->refundQuery($ledger, $input)->selectRaw("COALESCE(SUM(CASE WHEN bookkeeping_entries.direction = 'income' THEN bookkeeping_refunds.amount ELSE 0 END), 0) as income_refunds")->selectRaw("COALESCE(SUM(CASE WHEN bookkeeping_entries.direction = 'expense' THEN bookkeeping_refunds.amount ELSE 0 END), 0) as expense_refunds")->first();
+            $incomeRefunds = bcadd((string) $refunds->income_refunds, '0', 2);
+            $expenseRefunds = bcadd((string) $refunds->expense_refunds, '0', 2);
+        }
+        $income = bcsub($grossIncome, $incomeRefunds, 2);
+        $expense = bcsub($grossExpense, $expenseRefunds, 2);
 
-        return ['income' => $income, 'expense' => $expense, 'balance' => bcsub($income, $expense, 2)];
+        return [...['income' => $income, 'expense' => $expense, 'balance' => bcsub($income, $expense, 2)], ...(bccomp($incomeRefunds, '0.00', 2) !== 0 || bccomp($expenseRefunds, '0.00', 2) !== 0 ? ['income_refunds' => $incomeRefunds, 'expense_refunds' => $expenseRefunds] : [])];
     }
 
     /** @param array<string, mixed> $input @return array{totals: array{income: string, expense: string, balance: string}, categories: list<array{id: int, name: string, direction: string, amount: string, percentage: ?string}>} */
     private function summaryData(Ledger $ledger, array $input): array
     {
         $query = $this->summaryQuery($ledger, $input);
-        $totals = $this->totals($query);
-        $categories = (clone $query)->join('bookkeeping_categories', 'bookkeeping_entries.category_id', '=', 'bookkeeping_categories.id')
-            ->selectRaw('bookkeeping_categories.id, bookkeeping_categories.name, bookkeeping_entries.direction, SUM(bookkeeping_entries.amount) as total')
-            ->groupBy('bookkeeping_categories.id', 'bookkeeping_categories.name', 'bookkeeping_entries.direction')->orderByDesc('total')->get();
+        $totals = $this->totals($query, $ledger, $input);
+        $categories = (clone $query)->join('bookkeeping_categories', 'bookkeeping_entries.category_id', '=', 'bookkeeping_categories.id')->selectRaw('bookkeeping_categories.id, bookkeeping_categories.name, bookkeeping_entries.direction, SUM(bookkeeping_entries.amount) as total')->groupBy('bookkeeping_categories.id', 'bookkeeping_categories.name', 'bookkeeping_entries.direction')->get()->keyBy('id');
+        foreach ($this->refundQuery($ledger, $input)->join('bookkeeping_categories', 'bookkeeping_categories.id', '=', 'bookkeeping_entries.category_id')->selectRaw('bookkeeping_entries.category_id, bookkeeping_categories.name, bookkeeping_entries.direction, SUM(bookkeeping_refunds.amount) as total')->groupBy('bookkeeping_entries.category_id', 'bookkeeping_categories.name', 'bookkeeping_entries.direction')->get() as $refund) {
+            if (! $categories->has($refund->category_id)) {
+                $categories->put($refund->category_id, (object) ['id' => $refund->category_id, 'name' => $refund->name, 'direction' => $refund->direction, 'total' => '0.00']);
+            }
+            $categories[$refund->category_id]->total = bcsub((string) $categories[$refund->category_id]->total, (string) $refund->total, 2);
+        }
 
-        return ['totals' => $totals, 'categories' => $categories->map(function (object $row) use ($totals): array {
+        return ['totals' => $totals, 'categories' => $categories->sortByDesc('total')->map(function (object $row) use ($totals): array {
             $amount = bcadd((string) $row->total, '0', 2);
 
-            return ['id' => $row->id, 'name' => $row->name, 'direction' => $row->direction, 'amount' => $amount,
-                'percentage' => $row->direction === 'expense' && bccomp($totals['expense'], '0.00', 2) === 1 ? bcdiv(bcmul($amount, '100', 2), $totals['expense'], 2) : null];
+            return ['id' => $row->id, 'name' => $row->name, 'direction' => $row->direction, 'amount' => $amount, 'percentage' => $row->direction === 'expense' && bccomp($totals['expense'], '0.00', 2) === 1 ? bcdiv(bcmul($amount, '100', 2), $totals['expense'], 2) : null];
         })->values()->all()];
     }
 
     /** @return array{labels: list<string>, datasets: list<array{label: string, data: list<string>, borderColor: string, backgroundColor: string, tension: float, fill: bool}>} */
-    private function trend(Builder $query, string $startDate, string $endDate, string $timezone): array
+    private function trend(Builder $query, string $startDate, string $endDate, string $timezone, Ledger $ledger, array $input): array
     {
         $start = Carbon::parse($startDate, $timezone)->startOfDay();
         $end = Carbon::parse($endDate, $timezone)->startOfDay();
@@ -176,6 +189,13 @@ class BookkeepingQueryService
                 $bucket = $this->trendBucket(Carbon::parse($row->occurred_on, $timezone), $unit);
                 $totals[$bucket][$row->direction] = bcadd($totals[$bucket][$row->direction] ?? '0.00', (string) $row->total, 2);
             });
+        // Refunds affect the reporting period in which they actually occurred.
+        // The query builder is ledger-scoped by its caller; refund rows are added by dashboard below.
+
+        $this->refundQuery($ledger, $input)->select('bookkeeping_refunds.occurred_on', 'bookkeeping_entries.direction')->selectRaw('SUM(bookkeeping_refunds.amount) as total')->groupBy('bookkeeping_refunds.occurred_on', 'bookkeeping_entries.direction')->get()->each(function (object $row) use (&$totals, $unit, $timezone): void {
+            $bucket = $this->trendBucket(Carbon::parse($row->occurred_on, $timezone), $unit);
+            $totals[$bucket][$row->direction] = bcsub($totals[$bucket][$row->direction] ?? '0.00', (string) $row->total, 2);
+        });
 
         $labels = [];
         $income = [];
@@ -225,6 +245,17 @@ class BookkeepingQueryService
     }
 
     /** @param array<string, mixed> $input */
+    private function refundQuery(Ledger $ledger, array $input): Builder
+    {
+        return Refund::query()->join('bookkeeping_entries', 'bookkeeping_entries.id', '=', 'bookkeeping_refunds.entry_id')
+            ->where('bookkeeping_refunds.ledger_id', $ledger->id)->whereNull('bookkeeping_refunds.voided_at')->whereNull('bookkeeping_entries.voided_at')
+            ->whereBetween('bookkeeping_refunds.occurred_on', [$input['start_date'], $input['end_date']])
+            ->when(isset($input['direction']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.direction', $input['direction']))
+            ->when(isset($input['category_id']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.category_id', $input['category_id']))
+            ->when(isset($input['account_id']), fn (Builder $query): Builder => $query->where('bookkeeping_refunds.account_id', $input['account_id']))
+            ->when(isset($input['keyword']), fn (Builder $query): Builder => $query->where('bookkeeping_entries.description', 'like', '%'.$input['keyword'].'%'));
+    }
+
     private function summaryQuery(Ledger $ledger, array $input): Builder
     {
         return $this->query($ledger, [...$input, 'include_voided' => false]);

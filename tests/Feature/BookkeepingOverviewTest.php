@@ -34,6 +34,7 @@ class BookkeepingOverviewTest extends TestCase
         'bookkeeping_categories',
         'bookkeeping_accounts',
         'bookkeeping_entries',
+        'bookkeeping_refunds',
         'bookkeeping_transfers',
     ];
 

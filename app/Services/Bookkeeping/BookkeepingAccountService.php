@@ -6,6 +6,7 @@ use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
+use App\Models\Bookkeeping\Refund;
 use App\Models\Bookkeeping\Transfer;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -100,10 +101,11 @@ class BookkeepingAccountService
     public function accountsWithBalances(Ledger $ledger): Builder
     {
         $entries = Entry::query()->where('ledger_id', $ledger->id)->selectRaw("account_id, COALESCE(SUM(CASE WHEN direction = 'income' THEN amount ELSE -amount END), 0) as entry_balance")->whereNull('voided_at')->groupBy('account_id');
+        $refunds = Refund::query()->where('bookkeeping_refunds.ledger_id', $ledger->id)->selectRaw("bookkeeping_refunds.account_id, COALESCE(SUM(CASE WHEN bookkeeping_entries.direction = 'expense' THEN bookkeeping_refunds.amount ELSE -bookkeeping_refunds.amount END), 0) as refund_balance")->join('bookkeeping_entries', 'bookkeeping_entries.id', '=', 'bookkeeping_refunds.entry_id')->whereNull('bookkeeping_refunds.voided_at')->groupBy('bookkeeping_refunds.account_id');
         $outgoing = Transfer::query()->where('ledger_id', $ledger->id)->selectRaw('source_account_id, COALESCE(SUM(amount), 0) as outgoing_balance')->whereNull('voided_at')->groupBy('source_account_id');
         $incoming = Transfer::query()->where('ledger_id', $ledger->id)->selectRaw('destination_account_id, COALESCE(SUM(amount), 0) as incoming_balance')->whereNull('voided_at')->groupBy('destination_account_id');
 
-        return Account::query()->where('bookkeeping_accounts.ledger_id', $ledger->id)->select('bookkeeping_accounts.*')->leftJoinSub($entries, 'entry_balances', 'entry_balances.account_id', '=', 'bookkeeping_accounts.id')->leftJoinSub($outgoing, 'outgoing_balances', 'outgoing_balances.source_account_id', '=', 'bookkeeping_accounts.id')->leftJoinSub($incoming, 'incoming_balances', 'incoming_balances.destination_account_id', '=', 'bookkeeping_accounts.id')->selectRaw('CAST(opening_balance + COALESCE(entry_balance, 0) - COALESCE(outgoing_balance, 0) + COALESCE(incoming_balance, 0) AS DECIMAL(30, 2)) as balance');
+        return Account::query()->where('bookkeeping_accounts.ledger_id', $ledger->id)->select('bookkeeping_accounts.*')->leftJoinSub($entries, 'entry_balances', 'entry_balances.account_id', '=', 'bookkeeping_accounts.id')->leftJoinSub($refunds, 'refund_balances', 'refund_balances.account_id', '=', 'bookkeeping_accounts.id')->leftJoinSub($outgoing, 'outgoing_balances', 'outgoing_balances.source_account_id', '=', 'bookkeeping_accounts.id')->leftJoinSub($incoming, 'incoming_balances', 'incoming_balances.destination_account_id', '=', 'bookkeeping_accounts.id')->selectRaw('CAST(opening_balance + COALESCE(entry_balance, 0) + COALESCE(refund_balance, 0) - COALESCE(outgoing_balance, 0) + COALESCE(incoming_balance, 0) AS DECIMAL(30, 2)) as balance');
     }
 
     private function authorize(AccessContext $context, Ledger $ledger): void

@@ -7,6 +7,7 @@ use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
+use App\Models\Bookkeeping\Refund;
 use App\Models\User;
 use App\Services\Mcp\AccessResolver;
 use Closure;
@@ -44,6 +45,7 @@ class BookkeepingService
             $account = isset($data['account_id']) ? $this->account($ledger, $data['account_id']) : $entry->account;
             $occurredOn = $data['occurred_on'] ?? $entry->occurred_on->toDateString();
             $this->validateEntry($direction, $data['amount'] ?? $entry->amount, $category, $account, $occurredOn);
+            $this->assertRefundsAllowUpdate($entry, $direction, $category, $data['amount'] ?? $entry->amount);
             $changes = array_filter(['direction' => $data['direction'] ?? null, 'amount' => $data['amount'] ?? null, 'category_id' => $category->id, 'account_id' => $account->id, 'occurred_on' => $data['occurred_on'] ?? null], fn (mixed $value): bool => $value !== null);
             if (array_key_exists('description', $data)) {
                 $changes['description'] = $data['description'];
@@ -63,6 +65,9 @@ class BookkeepingService
                 $this->fail($entry ? 'revision' : 'entry_id', $entry ? '记录已被更新，请先查询最新版本。' : '记录不存在或已撤销。');
             }
             $before = $this->present($entry->load(['category', 'account']));
+            if (Refund::query()->where('entry_id', $entry->id)->whereNull('voided_at')->lockForUpdate()->exists()) {
+                $this->fail('entry_id', '存在有效退款记录的收支不能撤销。');
+            }
             $entry->update(['voided_at' => now(), 'voided_by' => $context->user->id, 'updated_by' => $context->user->id, 'revision' => $entry->revision + 1]);
 
             return ['before' => $before, 'entry' => $this->present($entry->refresh()->load(['category', 'account']))];
@@ -125,7 +130,7 @@ class BookkeepingService
                     $this->fail('event_id', '同一事件编号已用于不同内容。');
                 }
 
-return [...json_decode($previous->result, true, flags: JSON_THROW_ON_ERROR), 'replayed' => true, 'request_id' => $context->requestId];
+                return [...json_decode($previous->result, true, flags: JSON_THROW_ON_ERROR), 'replayed' => true, 'request_id' => $context->requestId];
             }
             $result = ['ok' => true, ...$operation($data, $ledger), 'replayed' => false, 'request_id' => $context->requestId];
             $operationId = DB::table('mcp_operations')->insertGetId(['public_id' => (string) str()->ulid(), 'workspace_id' => $workspaceId, 'server_id' => $context->server->id, 'user_id' => $context->user->id, 'module_key' => 'zhendianpu', 'access_scope_key' => 'bookkeeping:'.$ledger->public_id, 'scope' => json_encode(['ledger_id' => $ledger->public_id], JSON_THROW_ON_ERROR), 'tool_name' => $action, 'idempotency_key' => $data['event_id'], 'parameters_hash' => $hash, 'draft' => json_encode($data, JSON_THROW_ON_ERROR), 'status' => 'completed', 'result' => json_encode($result, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE), 'created_at' => now(), 'updated_at' => now()]);
@@ -161,7 +166,7 @@ return [...json_decode($previous->result, true, flags: JSON_THROW_ON_ERROR), 're
             $this->fail('category_id', '分类不存在、已停用、不是末级分类或与收支方向不一致。');
         }
 
-return $category;
+        return $category;
     }
 
     private function account(Ledger $ledger, int $id): Account
@@ -171,7 +176,7 @@ return $category;
             $this->fail('account_id', '账户不存在、已停用或不属于当前账本。');
         }
 
-return $account;
+        return $account;
     }
 
     private function validateEntry(string $direction, string $amount, Category $category, Account $account, string $occurredOn): void
@@ -180,6 +185,18 @@ return $account;
             $this->fail('entry', '收支方向、分类、账户和金额必须有效且属于同一账本。');
         } if (Carbon::parse($occurredOn, $account->ledger->timezone)->isAfter(now($account->ledger->timezone)->endOfDay())) {
             $this->fail('occurred_on', '只能记录已经发生的收支，不能使用未来日期。');
+        }
+    }
+
+    private function assertRefundsAllowUpdate(Entry $entry, string $direction, Category $category, string $amount): void
+    {
+        $refunds = Refund::query()->where('entry_id', $entry->id)->whereNull('voided_at')->lockForUpdate();
+        $refunded = $refunds->sum('amount');
+        if (bccomp((string) $refunded, $amount, 2) === 1) {
+            $this->fail('amount', '收支金额不能低于累计有效退款金额。');
+        }
+        if (bccomp((string) $refunded, '0.00', 2) === 1 && ($direction !== $entry->direction || $category->id !== $entry->category_id)) {
+            $this->fail('entry_id', '存在有效退款记录的收支不能修改方向或分类。');
         }
     }
 
@@ -206,6 +223,6 @@ return $account;
             }
         }
 
-return $value;
+        return $value;
     }
 }
