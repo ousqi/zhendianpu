@@ -51,6 +51,7 @@ docker compose exec -T -w /var/www/html/develop_mcp app composer install --no-in
 ### 开发约定
 
 - 修改前阅读相关代码、`composer.json` 和 Compose 配置，遵循项目现有目录结构、编码风格及 Laravel 约定。
+- 提交的业务代码注释使用中文；仅为复杂业务逻辑添加必要注释。
 - 保持代码兼容 PHP 8.4 和 Laravel 13，不擅自升级或降级技术栈。
 - 安装依赖使用 `composer install`；只有任务涉及依赖更新时才使用 `composer update`，并检查 `composer.lock` 的变更。
 - 不手动修改 `vendor/` 或其他生成文件，不提交 `.env`、密钥或凭据。
