@@ -36,6 +36,8 @@ class BookkeepingCategories extends Page implements HasTable
 
     public string $activeDirection = 'expense';
 
+    public ?int $selectedTopLevelCategoryId = null;
+
     private function ledger(): Ledger
     {
         $user = auth()->user();
@@ -45,7 +47,39 @@ class BookkeepingCategories extends Page implements HasTable
 
     public function updatedActiveDirection(): void
     {
+        $this->selectedTopLevelCategoryId = null;
         $this->resetTable();
+    }
+
+    public function showSubcategories(Category $category): void
+    {
+        $category = Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->whereNull('parent_id')->whereKey($category->id)->first();
+        if (! $category) {
+            return;
+        }
+
+        $this->selectedTopLevelCategoryId = $category->id;
+        $this->resetTable();
+    }
+
+    public function clearSelectedTopLevelCategory(): void
+    {
+        $this->selectedTopLevelCategoryId = null;
+        $this->resetTable();
+    }
+
+    public function selectedTopLevelCategory(): ?Category
+    {
+        if ($this->selectedTopLevelCategoryId === null) {
+            return null;
+        }
+
+        $category = Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->whereNull('parent_id')->whereKey($this->selectedTopLevelCategoryId)->first();
+        if (! $category) {
+            $this->selectedTopLevelCategoryId = null;
+        }
+
+        return $category;
     }
 
     public static function canAccess(): bool
@@ -57,14 +91,21 @@ class BookkeepingCategories extends Page implements HasTable
 
     public function table(Table $table): Table
     {
-        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection))->defaultSort('sort_order')->columns([
+        $selectedCategory = $this->selectedTopLevelCategory();
+
+        return $table->query(Category::query()->where('ledger_id', $this->ledger()->id)->where('direction', $this->activeDirection)->when($selectedCategory, fn ($query) => $query->where('parent_id', $selectedCategory->id), fn ($query) => $query->whereNull('parent_id')))->defaultSort('sort_order')->columns([
             TextColumn::make('direction')->label('方向')->formatStateUsing(fn (string $state): string => $state === 'income' ? '收入' : '支出'),
-            TextColumn::make('name')->label('名称')->sortable(), TextColumn::make('parent.name')->label('父分类')->placeholder('一级分类'), TextColumn::make('sort_order')->label('排序')->sortable(), IconColumn::make('is_active')->label('启用')->boolean(),
+            TextColumn::make('name')->label('名称')->searchable()->sortable(), TextColumn::make('parent.name')->label('父分类')->placeholder('一级分类')->visible(fn (): bool => $selectedCategory !== null), TextColumn::make('sort_order')->label('排序')->sortable(), IconColumn::make('is_active')->label('启用')->boolean(),
         ])->headerActions([$this->categoryAction()])->recordActions([
             $this->categoryAction('editCategory', '编辑'),
+            Action::make('viewSubcategories')->label('查看子分类')->visible(fn (Category $record): bool => $record->parent_id === null)->action(fn (Category $record) => $this->showSubcategories($record)),
             Action::make('toggleCategory')->label(fn (Category $record): string => $record->is_active ? '停用' : '启用')->visible(fn (): bool => $this->canWrite())->action(function (Category $record, BookkeepingCategoryService $service): void {
                 $service->toggle($this->context(), $this->ledger(), $record);
                 Notification::make()->title('分类状态已更新')->success()->send();
+            }),
+            Action::make('deleteCategory')->label('删除')->color('danger')->requiresConfirmation()->visible(fn (): bool => $this->canWrite())->action(function (Category $record, BookkeepingCategoryService $service): void {
+                $service->delete($this->context(), $this->ledger(), $record);
+                Notification::make()->title('分类已删除')->success()->send();
             }),
         ]);
     }

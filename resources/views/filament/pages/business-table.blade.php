@@ -9,6 +9,14 @@
                 支出分类
             </x-filament::tabs.item>
         </x-filament::tabs>
+
+        @if ($category = $this->selectedTopLevelCategory())
+            <div class="mt-4">
+                <x-filament::button color="gray" icon="heroicon-m-arrow-left" wire:click="clearSelectedTopLevelCategory">
+                    返回一级分类（{{ $category->name }}）
+                </x-filament::button>
+            </div>
+        @endif
     @endif
 
     {{ $this->table }}

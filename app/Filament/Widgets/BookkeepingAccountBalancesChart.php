@@ -12,7 +12,7 @@ class BookkeepingAccountBalancesChart extends ChartWidget
 
     protected ?string $pollingInterval = null;
 
-    protected ?string $maxHeight = '220px';
+    protected ?string $maxHeight = '360px';
 
     protected string $color = 'info';
 

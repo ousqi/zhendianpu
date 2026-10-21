@@ -236,6 +236,65 @@ class BookkeepingServiceTest extends TestCase
         $this->assertDatabaseCount('audit_logs', 3);
     }
 
+    public function test_deletes_an_unreferenced_leaf_category(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+
+        app(BookkeepingCategoryService::class)->delete($context, $this->ledger, $category);
+
+        $this->assertModelMissing($category);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'bookkeeping.category.delete', 'entity_id' => (string) $category->id]);
+    }
+
+    public function test_rejects_deleting_a_category_from_another_ledger(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => Ledger::factory()->create()->id, 'direction' => 'expense']);
+
+        try {
+            app(BookkeepingCategoryService::class)->delete($context, $this->ledger, $category);
+            $this->fail('Expected cross-ledger category deletion to fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(['分类不属于当前账本。'], $exception->errors()['category']);
+        }
+
+        $this->assertModelExists($category);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_rejects_deleting_a_category_associated_with_bookkeeping_entries(): void
+    {
+        $context = $this->context();
+        $category = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        app(BookkeepingService::class)->createEntry($context->user, $this->ledger, ['direction' => 'expense', 'amount' => '10.00', 'category_id' => $category->id], 'admin');
+
+        try {
+            app(BookkeepingCategoryService::class)->delete($context, $this->ledger, $category);
+            $this->fail('Expected referenced category deletion to fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(['已被收支记录引用的分类不能删除。'], $exception->errors()['category']);
+        }
+
+        $this->assertModelExists($category);
+    }
+
+    public function test_rejects_deleting_a_parent_category_with_children(): void
+    {
+        $context = $this->context();
+        $parent = Category::factory()->create(['ledger_id' => $this->ledger->id, 'direction' => 'expense']);
+        Category::factory()->create(['ledger_id' => $this->ledger->id, 'parent_id' => $parent->id, 'direction' => 'expense']);
+
+        try {
+            app(BookkeepingCategoryService::class)->delete($context, $this->ledger, $parent);
+            $this->fail('Expected parent category deletion to fail.');
+        } catch (ValidationException $exception) {
+            $this->assertSame(['含有子分类的父分类不能删除。'], $exception->errors()['category']);
+        }
+
+        $this->assertModelExists($parent);
+    }
+
     public function test_category_management_tools_are_registered(): void
     {
         ZhendianpuServer::tools()->assertRegistered([

@@ -4,6 +4,7 @@ namespace App\Services\Bookkeeping;
 
 use App\Data\Mcp\AccessContext;
 use App\Models\Bookkeeping\Category;
+use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
@@ -71,6 +72,25 @@ class BookkeepingCategoryService
             $this->audit($context, $ledger, 'bookkeeping.category.toggle', $category, $before);
 
             return $category;
+        }, attempts: 3);
+    }
+
+    public function delete(AccessContext $context, Ledger $ledger, Category $category): void
+    {
+        $this->authorize($context, $ledger);
+
+        DB::transaction(function () use ($context, $ledger, $category): void {
+            $category = Category::query()->whereKey($category->id)->lockForUpdate()->firstOrFail();
+            $this->owned($ledger, $category);
+            if (Entry::query()->where('ledger_id', $ledger->id)->where('category_id', $category->id)->lockForUpdate()->exists()) {
+                throw ValidationException::withMessages(['category' => '已被收支记录引用的分类不能删除。']);
+            }
+            if (Category::query()->where('ledger_id', $ledger->id)->where('parent_id', $category->id)->lockForUpdate()->exists()) {
+                throw ValidationException::withMessages(['category' => '含有子分类的父分类不能删除。']);
+            }
+            $before = $category->toArray();
+            $category->delete();
+            $this->audit($context, $ledger, 'bookkeeping.category.delete', $category, $before);
         }, attempts: 3);
     }
 
