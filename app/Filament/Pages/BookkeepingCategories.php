@@ -30,7 +30,7 @@ class BookkeepingCategories extends Page implements HasTable
 
     protected static string|UnitEnum|null $navigationGroup = '记账';
 
-    protected static ?int $navigationSort = 3;
+    protected static ?int $navigationSort = 4;
 
     protected string $view = 'filament.pages.business-table';
 

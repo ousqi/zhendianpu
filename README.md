@@ -285,7 +285,7 @@ MCP 客户端应先调用 `list_ledgers` 或不带参数的 `get_bookkeeping_con
 | `add_entries` | 写入、幂等 | 原子新增 1–50 条已发生收支。 |
 | `add_transfer` | 写入、幂等 | 新增一笔已发生的账户间转账。 |
 | `add_refund` / `list_refunds` / `update_refund` / `void_refund` | 写入/读取 | 新增、查询、修改或撤销指定账本的退款记录；退款需关联有效原收支，方向自动推断。 |
-| `list_entries` | 读取 | 按日期、方向、分类、账户、关键字、作废状态或是否有有效退款查询账目；每条记录会返回有效退款累计 `refunded_amount` 和净额 `net_amount`。 |
+| `list_entries` | 读取 | 按日期、方向、分类、账户、关键字、作废状态或 `has_refunds`（是否有有效退款）查询账目；每条记录会返回有效退款累计 `refunded_amount` 和净额 `net_amount`。 |
 | `get_bookkeeping_summary` | 读取 | 返回收入、支出、期间结余和分类汇总。 |
 | `update_entry` | 写入、幂等 | 基于账目 ID 和修订版本修改账目。 |
 | `update_transfer` | 写入、幂等 | 基于转账 ID 和修订版本修改转账。 |
@@ -296,6 +296,8 @@ MCP 客户端应先调用 `list_ledgers` 或不带参数的 `get_bookkeeping_con
 除账本列表和未选账本的上下文请求外，所有记账业务工具均必须提供 `ledger_id`。所有收支和转账写入工具都使用新的 ULID 格式 `event_id` 防止重复写入；网络重试同一请求时，必须保留**同一个** `event_id` 且参数完全一致；不同业务操作必须使用新的 `event_id`。
 
 退款仅可关联当前活动账本中未撤销的原收支；退款账户也必须启用且属于同一账本。有效退款累计不得超过原金额；有有效退款的原收支不能撤销或把金额调低至累计退款以下。原支出退款降低支出并增加退款账户余额；原收入退款降低收入并减少退款账户余额。报表和趋势按退款实际发生日、并归入原收支分类计算净额；可用时响应还会提供 `income_refunds` 与 `expense_refunds`。
+
+查询有退款的消费时，使用 `list_entries` 并传入 `direction: "expense"` 与 `has_refunds: true`；响应中的 `refunded_amount` 为累计有效退款，`net_amount` 为扣除退款后的实际净额。
 
 分类管理工具不使用 `event_id`。执行新增、修改或启停前，应先调用 `list_categories` 确认分类 ID 和当前状态；分类管理权限与记账写入权限一致。
 

@@ -7,7 +7,6 @@ use App\Models\Bookkeeping\Account;
 use App\Models\Bookkeeping\Category;
 use App\Models\Bookkeeping\Entry;
 use App\Models\Bookkeeping\Ledger;
-use App\Models\Bookkeeping\Refund;
 use App\Models\User;
 use App\Services\Bookkeeping\BookkeepingQueryService;
 use App\Services\Bookkeeping\BookkeepingRefundService;
@@ -66,7 +65,7 @@ class BookkeepingEntries extends Page implements HasTable
 
     protected function entries(): Builder
     {
-        return Entry::query()->where('ledger_id', $this->ledger()->id)->with(['category', 'account'])->withSum(['refunds as refunded_amount' => fn (Builder $query): Builder => $query->whereNull('voided_at')], 'amount');
+        return Entry::query()->where('ledger_id', $this->ledger()->id)->with(['category', 'account']);
     }
 
     public function table(Table $table): Table
@@ -87,7 +86,7 @@ class BookkeepingEntries extends Page implements HasTable
                         ->modalSubmitAction(false)
                         ->modalCancelActionLabel('关闭'),
                 ),
-            TextColumn::make('account.name')->label('账户')->visibleFrom('md'), TextColumn::make('amount')->label('金额')->money($this->ledger()->currency)->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'), TextColumn::make('refunded_amount')->label('已退款')->money($this->ledger()->currency)->placeholder('—'),
+            TextColumn::make('account.name')->label('账户')->visibleFrom('md'), TextColumn::make('amount')->label('金额')->money($this->ledger()->currency)->prefix(fn (Entry $entry): string => $entry->direction === 'income' ? '+' : '-'),
         ])->filters([
             Filter::make('occurred_on')->label('日期范围')->schema([
                 DatePicker::make('start')->label('开始日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d'),
@@ -119,34 +118,6 @@ class BookkeepingEntries extends Page implements HasTable
                 ->query(fn (Builder $query, array $data): Builder => $query->when($data['value'] ?? null, fn (Builder $query, string $value): Builder => $query->where('description', 'like', '%'.$value.'%'))),
         ], layout: FiltersLayout::Modal)->toolbarActions([$this->recordAction()])->recordActions([
             $this->recordAction('editEntry', '编辑'),
-            Action::make('addRefund')->label('新增退款')->visible(fn (Entry $record): bool => $this->canWrite() && $record->voided_at === null)->schema([
-                TextInput::make('amount')->label('退款金额')->numeric()->minValue(0.01)->required(),
-                Select::make('account_id')->label('退款账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->required(),
-                DatePicker::make('occurred_on')->label('退款日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(fn (): string => now($this->ledger()->timezone)->toDateString())->required(),
-                Textarea::make('description')->label('说明')->maxLength(1000),
-            ])->action(function (array $data, Entry $record, BookkeepingRefundService $service): void {
-                $service->add($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, ...$data], 'admin');
-                Notification::make()->title('退款记录已保存')->success()->send();
-            }),
-            Action::make('viewRefunds')->label('退款记录')->visible(fn (Entry $record): bool => $record->refunds()->exists())->fillForm(fn (Entry $record): array => ['refunds' => $record->refunds()->orderByDesc('occurred_on')->get()->map(fn ($refund): string => $refund->occurred_on->toDateString().' · '.$refund->amount)->implode("\n")])->schema([Textarea::make('refunds')->label('退款历史')->rows(6)->disabled()])->modalSubmitAction(false)->modalCancelActionLabel('关闭'),
-            Action::make('editRefund')->label('编辑退款')->visible(fn (Entry $record): bool => $this->canWrite() && $record->refunds()->whereNull('voided_at')->exists())->schema([
-                Select::make('refund_id')->label('退款记录')->options(fn (Entry $record): array => $record->refunds()->whereNull('voided_at')->orderByDesc('occurred_on')->get()->mapWithKeys(fn (Refund $refund): array => [$refund->public_id => $refund->occurred_on->toDateString().' · '.$refund->amount.' · '.$refund->account->name])->all())->required(),
-                TextInput::make('amount')->label('退款金额')->numeric()->minValue(0.01)->required(),
-                Select::make('account_id')->label('退款账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->required(),
-                DatePicker::make('occurred_on')->label('退款日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->required(),
-                Textarea::make('description')->label('说明')->maxLength(1000),
-            ])->action(function (array $data, Entry $record, BookkeepingRefundService $service): void {
-                $refund = $record->refunds()->whereNull('voided_at')->where('public_id', $data['refund_id'])->firstOrFail();
-                $service->update($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'refund_id' => $refund->public_id, 'revision' => $refund->revision, ...$data]);
-                Notification::make()->title('退款记录已更新')->success()->send();
-            }),
-            Action::make('voidRefund')->label('撤销退款')->color('danger')->visible(fn (Entry $record): bool => $this->canWrite() && $record->refunds()->whereNull('voided_at')->exists())->requiresConfirmation()->schema([
-                Select::make('refund_id')->label('退款记录')->options(fn (Entry $record): array => $record->refunds()->whereNull('voided_at')->orderByDesc('occurred_on')->get()->mapWithKeys(fn (Refund $refund): array => [$refund->public_id => $refund->occurred_on->toDateString().' · '.$refund->amount.' · '.$refund->account->name])->all())->required(),
-            ])->action(function (array $data, Entry $record, BookkeepingRefundService $service): void {
-                $refund = $record->refunds()->whereNull('voided_at')->where('public_id', $data['refund_id'])->firstOrFail();
-                $service->void($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'refund_id' => $refund->public_id, 'revision' => $refund->revision]);
-                Notification::make()->title('退款记录已撤销')->success()->send();
-            }),
             Action::make('voidEntry')->label('撤销')->color('danger')->visible(fn (): bool => $this->canWrite())->requiresConfirmation()->action(function (Entry $record, BookkeepingService $service): void {
                 $service->void($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision]);
                 Notification::make()->title('收支记录已撤销')->success()->send();
@@ -164,6 +135,7 @@ class BookkeepingEntries extends Page implements HasTable
             Select::make('account_id')->label('账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->default(fn (): ?int => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_default', true)->value('id')),
             DatePicker::make('occurred_on')->label('日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(fn (): string => now($this->ledger()->timezone)->toDateString())->required(), Textarea::make('description')->label('说明')->maxLength(1000),
         ])->fillForm(fn (?Entry $record): array => $record ? $record->only(['direction', 'amount', 'category_id', 'account_id', 'occurred_on', 'description']) : [])
+            ->extraModalFooterActions(fn (?Entry $record): array => $name === 'editEntry' && $record !== null ? [$this->refundAction()] : [])
             ->action(function (array $data, ?Entry $record, BookkeepingService $service): void {
                 if ($record) {
                     $service->update($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, 'revision' => $record->revision, ...$data], 'admin');
@@ -172,6 +144,25 @@ class BookkeepingEntries extends Page implements HasTable
                 }
                 Notification::make()->title('收支记录已保存')->success()->send();
             });
+    }
+
+    private function refundAction(): Action
+    {
+        return Action::make('addRefund')
+            ->label('新增退款')
+            ->color('warning')
+            ->visible(fn (Entry $record): bool => $this->canWrite() && $record->voided_at === null)
+            ->schema([
+                TextInput::make('amount')->label('退款金额')->numeric()->minValue(0.01)->required(),
+                Select::make('account_id')->label('退款账户')->options(fn (): array => Account::query()->where('ledger_id', $this->ledger()->id)->where('is_active', true)->orderBy('sort_order')->pluck('name', 'id')->all())->required(),
+                DatePicker::make('occurred_on')->label('退款日期')->native(false)->displayFormat('Y-m-d')->format('Y-m-d')->default(fn (): string => now($this->ledger()->timezone)->toDateString())->required(),
+                Textarea::make('description')->label('说明')->maxLength(1000),
+            ])
+            ->action(function (array $data, Entry $record, BookkeepingRefundService $service): void {
+                $service->add($this->context(), ['ledger_id' => $this->ledger()->public_id, 'event_id' => (string) Str::ulid(), 'entry_id' => $record->public_id, ...$data], 'admin');
+                Notification::make()->title('退款记录已保存')->success()->send();
+            })
+            ->cancelParentActions();
     }
 
     private function context(): AccessContext
