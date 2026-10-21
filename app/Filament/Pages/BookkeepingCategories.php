@@ -15,6 +15,8 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -114,9 +116,9 @@ class BookkeepingCategories extends Page implements HasTable
     {
         return Action::make($name)->label($label)->visible(fn (): bool => $this->canWrite())->schema([
             TextInput::make('name')->label('名称')->required()->maxLength(255),
-            Select::make('direction')->label('方向')->options(['income' => '收入', 'expense' => '支出'])->required()->disabled(fn (?Category $record): bool => $record?->entries()->exists() ?? false),
-            Select::make('parent_id')->label('父分类')->options(fn (): array => Category::query()->where('ledger_id', $this->ledger()->id)->whereNull('parent_id')->orderBy('sort_order')->get(['id', 'name', 'direction'])->mapWithKeys(fn (Category $category): array => [$category->id => $category->displayName()])->all())->searchable(), TextInput::make('sort_order')->label('排序')->numeric()->default(0)->required(),
-        ])->fillForm(fn (?Category $record): array => $record?->only(['name', 'direction', 'parent_id', 'sort_order']) ?? ['sort_order' => 0])
+            Select::make('direction')->label('方向')->options(['income' => '收入', 'expense' => '支出'])->required()->live()->afterStateUpdated(fn (Set $set): mixed => $set('parent_id', null))->disabled(fn (?Category $record): bool => $record?->entries()->exists() ?? false),
+            Select::make('parent_id')->label('父分类')->options(fn (Get $get, ?Category $record): array => Category::query()->where('ledger_id', $this->ledger()->id)->whereNull('parent_id')->where('direction', $get('direction'))->when($record, fn ($query) => $query->where('id', '!=', $record->id))->orderBy('sort_order')->get(['id', 'name', 'direction'])->mapWithKeys(fn (Category $category): array => [$category->id => $category->displayName()])->all())->searchable(), TextInput::make('sort_order')->label('排序')->numeric()->default(0)->required(),
+        ])->fillForm(fn (?Category $record): array => $record?->only(['name', 'direction', 'parent_id', 'sort_order']) ?? ['direction' => $this->activeDirection, 'parent_id' => $this->selectedTopLevelCategory()?->id, 'sort_order' => 0])
             ->action(function (array $data, ?Category $record, BookkeepingCategoryService $service): void {
                 if ($record) {
                     $service->update($this->context(), $this->ledger(), $record, $data);
