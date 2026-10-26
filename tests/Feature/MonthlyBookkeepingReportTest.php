@@ -230,7 +230,7 @@ class MonthlyBookkeepingReportTest extends TestCase
         $reports->generate($ledger, '2026-10');
 
         $archiveHtml = Storage::disk('local')->get('reports/monthly/'.$ledger->public_id.'/2026-09.html');
-        $latestHtml = Storage::disk('local')->get('reports/monthly/'.$ledger->public_id.'/latest.html');
+        $latestHtml = Storage::disk('local')->get($reports->path($ledger));
         $baseUrl = route('reports.monthly.show', $ledger);
         $this->assertStringContainsString($baseUrl.'?month=2026-09', $archiveHtml);
         $this->assertStringContainsString($baseUrl.'?month=2026-10', $archiveHtml);

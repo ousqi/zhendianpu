@@ -92,22 +92,6 @@ class BookkeepingLedgers extends Page implements HasTable
                     ->openUrlInNewTab()
                     ->visible(fn (Ledger $record): bool => Storage::disk('local')->exists(app(MonthlyBookkeepingReportService::class)->path($record))),
                 $this->editLedgerAction(),
-                Action::make('archiveLedger')
-                    ->label('归档')
-                    ->color('danger')
-                    ->requiresConfirmation()
-                    ->modalDescription('归档后账本及其数据将仅可查看，不能恢复写入。')
-                    ->visible(fn (Ledger $record): bool => $this->canWrite() && $record->status === 'active')
-                    ->action(function (Ledger $record, LedgerService $service): void {
-                        $this->assertCanWriteActive($record);
-
-                        $service->archive($record);
-                        if ($record->public_id === $this->currentLedgerId) {
-                            $user = auth()->user();
-                            $this->currentLedgerId = $user instanceof User ? $service->current($user)->public_id : null;
-                        }
-                        Notification::make()->title('账本已归档')->success()->send();
-                    }),
             ]);
     }
 

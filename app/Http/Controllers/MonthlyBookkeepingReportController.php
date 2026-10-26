@@ -39,6 +39,7 @@ class MonthlyBookkeepingReportController extends Controller
     {
         $month = $request->query('month');
         abort_unless($month === null || (is_string($month) && preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month) === 1), 404);
+
         $path = $reports->path($ledger, $month);
         abort_unless(Storage::disk('local')->exists($path), 404);
 
