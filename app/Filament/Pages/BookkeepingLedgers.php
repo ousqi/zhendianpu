@@ -7,6 +7,7 @@ use App\Models\Bookkeeping\Ledger;
 use App\Models\User;
 use App\Services\Bookkeeping\BookkeepingService;
 use App\Services\Bookkeeping\LedgerService;
+use App\Services\Bookkeeping\MonthlyBookkeepingReportService;
 use App\Services\Mcp\AccessResolver;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -17,6 +18,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
+use Illuminate\Support\Facades\Storage;
 use UnitEnum;
 
 class BookkeepingLedgers extends Page implements HasTable
@@ -84,6 +86,11 @@ class BookkeepingLedgers extends Page implements HasTable
                         $this->resetTable();
                         Notification::make()->title('已切换到此账本')->success()->send();
                     }),
+                Action::make('viewMonthlyReport')
+                    ->label('查看月报')
+                    ->url(fn (Ledger $record): string => route('reports.monthly.show', $record))
+                    ->openUrlInNewTab()
+                    ->visible(fn (Ledger $record): bool => Storage::disk('local')->exists(app(MonthlyBookkeepingReportService::class)->path($record))),
                 $this->editLedgerAction(),
                 Action::make('archiveLedger')
                     ->label('归档')

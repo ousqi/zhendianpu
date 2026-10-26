@@ -61,7 +61,15 @@ class MonthlyBookkeepingReportTest extends TestCase
         $this->assertStringContainsString('最新', $html);
     }
 
-    public function test_public_route_serves_latest_and_selected_historical_static_reports(): void
+    public function test_reports_require_authentication(): void
+    {
+        $ledger = Ledger::factory()->create();
+
+        $this->get(route('reports.index'))->assertRedirect(route('login'));
+        $this->get(route('reports.monthly.show', $ledger))->assertRedirect(route('login'));
+    }
+
+    public function test_authenticated_users_can_view_latest_and_selected_historical_static_reports(): void
     {
         Storage::fake('local');
         $published = Ledger::factory()->create();
@@ -69,11 +77,36 @@ class MonthlyBookkeepingReportTest extends TestCase
         Storage::disk('local')->put('reports/monthly/'.$published->public_id.'/latest.html', '<!doctype html><title>Published</title>');
         Storage::disk('local')->put('reports/monthly/'.$published->public_id.'/2026-09.html', '<!doctype html><title>September</title>');
 
+        $this->actingAs(User::factory()->create());
+
         $this->get(route('reports.monthly.show', $published))->assertOk()->assertHeader('Content-Type', 'text/html; charset=UTF-8')->assertSee('Published', false);
         $this->get(route('reports.monthly.show', ['ledger' => $published, 'month' => '2026-09']))->assertOk()->assertSee('September', false);
         $this->get(route('reports.monthly.show', $missing))->assertNotFound();
         $this->get(route('reports.monthly.show', ['ledger' => $published, 'month' => '2026-08']))->assertNotFound();
         $this->get(route('reports.monthly.show', ['ledger' => $published, 'month' => '../../.env']))->assertNotFound();
+    }
+
+    public function test_authenticated_users_can_view_the_report_landing_page_with_report_availability(): void
+    {
+        Storage::fake('local');
+        $published = Ledger::factory()->create(['name' => '春日账本', 'currency' => 'CNY']);
+        Ledger::factory()->create(['name' => '夏日账本', 'currency' => 'USD']);
+        Ledger::factory()->create(['name' => '已归档账本', 'status' => 'archived']);
+        Storage::disk('local')->put('reports/monthly/'.$published->public_id.'/latest.html', '<!doctype html><title>Published</title>');
+
+        $this->actingAs(User::factory()->create());
+
+        $response = $this->get(route('reports.index'));
+
+        $response->assertOk()
+            ->assertSee('春日账本')
+            ->assertSee('CNY')
+            ->assertSee('最新报告已生成')
+            ->assertSee(route('reports.monthly.show', $published), false)
+            ->assertSee('夏日账本')
+            ->assertSee('USD')
+            ->assertSee('最新报告暂不可用')
+            ->assertDontSee('已归档账本');
     }
 
     public function test_report_shows_daily_refund_adjustments_and_separate_top_ten_rankings(): void
