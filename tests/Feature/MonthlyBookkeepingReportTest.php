@@ -147,6 +147,10 @@ class MonthlyBookkeepingReportTest extends TestCase
         $this->assertStringContainsString('收入分类1', $html);
         $this->assertStringContainsString('收入分类10', $html);
         $this->assertStringContainsString('其他', $html);
+        $this->assertStringContainsString('--segment-color:#0f766e', $html);
+        $this->assertStringContainsString('--segment-color:#0e7490', $html);
+        $this->assertStringContainsString('--segment-color:#94a3b8', $html);
+        $this->assertStringContainsString('background-color:#0f766e', $html);
         $this->assertStringNotContainsString('收入分类11</span>', $html);
         $this->assertStringContainsString('收入记录1', $html);
         $this->assertStringContainsString('收入记录10', $html);
@@ -154,6 +158,34 @@ class MonthlyBookkeepingReportTest extends TestCase
         $incomeRanking = explode('最大支出记录 Top 10', $incomeRanking, 2)[0];
         $this->assertStringNotContainsString('收入记录11', $incomeRanking);
         $this->assertStringContainsString('房租', $html);
+    }
+
+    public function test_report_assigns_a_distinct_color_to_a_real_other_category(): void
+    {
+        Storage::fake('local');
+        $ledger = Ledger::factory()->create(['currency' => 'CNY']);
+        $account = Account::factory()->create(['ledger_id' => $ledger->id]);
+        $user = User::factory()->create();
+
+        for ($index = 1; $index <= 11; $index++) {
+            $category = Category::factory()->create(['ledger_id' => $ledger->id, 'name' => $index === 2 ? '其他' : '收入分类'.$index, 'direction' => 'income']);
+            Entry::factory()->create([
+                'ledger_id' => $ledger->id,
+                'category_id' => $category->id,
+                'account_id' => $account->id,
+                'created_by' => $user->id,
+                'updated_by' => $user->id,
+                'amount' => (string) (1200 - ($index * 100)).'.00',
+                'direction' => 'income',
+                'occurred_on' => '2026-09-12',
+            ]);
+        }
+
+        app(MonthlyBookkeepingReportService::class)->generate($ledger, '2026-09');
+
+        $html = Storage::disk('local')->get('reports/monthly/'.$ledger->public_id.'/latest.html');
+        $this->assertStringContainsString('<span class="rank-number">2</span><span class="rank-name"><i class="rank-dot" style="background-color:#0e7490" aria-hidden="true"></i>其他</span>', $html);
+        $this->assertStringContainsString('<span class="rank-number">—</span><span class="rank-name"><i class="rank-dot" style="background-color:#94a3b8" aria-hidden="true"></i>其他</span>', $html);
     }
 
     public function test_report_calculates_month_over_month_and_year_over_year_comparisons_from_valid_period_activity(): void

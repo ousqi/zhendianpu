@@ -16,6 +16,14 @@ class MonthlyBookkeepingReportService
 
     private const int RANKING_LIMIT = 10;
 
+    /** @var array{income: list<string>, expense: list<string>} */
+    private const array CATEGORY_COLORS = [
+        'income' => ['#0f766e', '#0e7490', '#2563eb', '#4f46e5', '#7c3aed', '#9333ea', '#c026d3', '#be123c', '#c2410c', '#a16207'],
+        'expense' => ['#b91c1c', '#e11d48', '#dc2626', '#ea580c', '#f97316', '#d97706', '#b45309', '#9f1239', '#9d174d', '#c026d3'],
+    ];
+
+    private const string OTHER_CATEGORY_COLOR = '#94a3b8';
+
     public function generate(Ledger $ledger, ?string $period = null): void
     {
         [$startDate] = $this->period($ledger, $period);
@@ -183,31 +191,42 @@ class MonthlyBookkeepingReportService
         }
         $rankings = ['income' => [], 'expense' => []];
         foreach ($categories as $category) {
-            $rankings[$category->direction][] = ['name' => $category->name, 'amount' => bcadd((string) $category->total, '0', 2)];
+            $rankings[$category->direction][] = ['name' => $category->name, 'amount' => bcadd((string) $category->total, '0', 2), 'is_synthetic' => false];
         }
 
-        return ['income' => $this->limitCategoryRanking($rankings['income'], $totals['income']), 'expense' => $this->limitCategoryRanking($rankings['expense'], $totals['expense'])];
+        return ['income' => $this->limitCategoryRanking($rankings['income'], $totals['income'], 'income'), 'expense' => $this->limitCategoryRanking($rankings['expense'], $totals['expense'], 'expense')];
     }
 
-    /** @param list<array{name: string, amount: string}> $categories @return list<array<string, int|string>> */
-    private function limitCategoryRanking(array $categories, string $total): array
+    /** @param list<array{name: string, amount: string, is_synthetic: bool}> $categories @return list<array<string, bool|int|string>> */
+    private function limitCategoryRanking(array $categories, string $total, string $direction): array
     {
         usort($categories, fn (array $left, array $right): int => bccomp($right['amount'], $left['amount'], 2));
         $visible = array_slice($categories, 0, self::RANKING_LIMIT);
         $remaining = array_slice($categories, self::RANKING_LIMIT);
         if ($remaining !== []) {
-            $visible[] = ['name' => '其他', 'amount' => array_reduce($remaining, fn (string $amount, array $category): string => bcadd($amount, $category['amount'], 2), '0.00')];
+            $visible[] = ['name' => '其他', 'amount' => array_reduce($remaining, fn (string $amount, array $category): string => bcadd($amount, $category['amount'], 2), '0.00'), 'is_synthetic' => true];
         }
         $start = 0;
 
-        return array_map(function (array $category) use ($total, &$start): array {
+        return array_map(function (array $category, int $index) use ($total, $direction, &$start): array {
             $percentage = $this->percentage($category['amount'], $total);
             $portion = $this->barPercentage($percentage);
             $segment = ['start' => $start, 'end' => min(100, $start + $portion)];
             $start = $segment['end'];
 
-            return [...$category, 'percentage' => $percentage, 'bar_percentage' => $portion, 'donut_start' => $segment['start'], 'donut_end' => $segment['end']];
-        }, $visible);
+            return [...$category, 'percentage' => $percentage, 'bar_percentage' => $portion, 'donut_start' => $segment['start'], 'donut_end' => $segment['end'], 'color' => $this->categoryColor($direction, $index, $category['is_synthetic'])];
+        }, $visible, array_keys($visible));
+    }
+
+    private function categoryColor(string $direction, int $index, bool $isSynthetic): string
+    {
+        if ($isSynthetic) {
+            return self::OTHER_CATEGORY_COLOR;
+        }
+
+        $palette = self::CATEGORY_COLORS[$direction];
+
+        return $palette[$index % count($palette)];
     }
 
     private function percentage(string $amount, string $total): string
