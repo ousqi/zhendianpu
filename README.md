@@ -259,6 +259,18 @@ https://<你的生产域名>/mcp/zhendianpu
 
 MCP 客户端应先调用 `list_ledgers` 或不带参数的 `get_bookkeeping_context` 获取账本列表，再在后续所有分类、账户、收支、转账和汇总工具请求中传入对应的 `ledger_id`。不同账本间不能使用普通账户转账。
 
+### 月报
+
+可手动生成月报：
+
+```bash
+php artisan bookkeeping:generate-monthly-reports
+```
+
+不带 `--period` 时，默认生成每个活动账本上一个完整的日历月；如需指定月份，使用 `--period=YYYY-MM`，例如 `php artisan bookkeeping:generate-monthly-reports --period=2026-10`。命令会为每个活动账本向已配置的队列派发一个任务，因此需保持队列 Worker 运行。
+
+月报生成完成后，登录后台并进入「账本管理」，在「月报」列访问。生成的静态文件同时保留最新月报及按月归档的历史月报。系统排程会在每月第一天的 `00:10`（`Asia/Shanghai`）自动生成上月月报。
+
 ### 使用原则
 
 - **先选择账本并读取上下文**：每次新的会话先调用 `list_ledgers` 或 `get_bookkeeping_context` 获取账本，再带 `ledger_id` 调用 `get_bookkeeping_context` 获取该账本的日期、分类、账户、默认账户和权限。

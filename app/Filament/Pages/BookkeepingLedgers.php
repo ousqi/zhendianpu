@@ -55,6 +55,8 @@ class BookkeepingLedgers extends Page implements HasTable
 
     public function table(Table $table): Table
     {
+        $reports = app(MonthlyBookkeepingReportService::class);
+
         return $table
             ->query(Ledger::query())
             ->defaultSort('name')
@@ -68,6 +70,11 @@ class BookkeepingLedgers extends Page implements HasTable
                 TextColumn::make('currency')->label('币种')->sortable(),
                 TextColumn::make('timezone')->label('时区')->visibleFrom('md'),
                 TextColumn::make('status')->label('状态')->badge()->color(fn (string $state): string => $state === 'active' ? 'success' : 'gray')->formatStateUsing(fn (string $state): string => $state === 'active' ? '启用' : '已归档'),
+                TextColumn::make('monthly_report')
+                    ->label('月报')
+                    ->state(fn (Ledger $record): string => Storage::disk('local')->exists($reports->path($record)) ? '查看月报' : '尚未生成')
+                    ->url(fn (Ledger $record): ?string => Storage::disk('local')->exists($reports->path($record)) ? route('reports.monthly.show', $record) : null)
+                    ->openUrlInNewTab(),
                 TextColumn::make('current_ledger')->label('当前使用')->badge()->state(fn (Ledger $record): string => $record->public_id === $this->currentLedgerId ? '当前账本' : '')->color('primary')->placeholder('—'),
                 TextColumn::make('updated_at')->label('更新时间')->dateTime('Y-m-d H:i')->sortable()->visibleFrom('md'),
             ])
@@ -86,11 +93,6 @@ class BookkeepingLedgers extends Page implements HasTable
                         $this->resetTable();
                         Notification::make()->title('已切换到此账本')->success()->send();
                     }),
-                Action::make('viewMonthlyReport')
-                    ->label('查看月报')
-                    ->url(fn (Ledger $record): string => route('reports.monthly.show', $record))
-                    ->openUrlInNewTab()
-                    ->visible(fn (Ledger $record): bool => Storage::disk('local')->exists(app(MonthlyBookkeepingReportService::class)->path($record))),
                 $this->editLedgerAction(),
             ]);
     }
